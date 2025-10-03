@@ -1,0 +1,3985 @@
+<!DOCTYPE html>
+<html>
+<!-- 
+TODO:
+- Slightly slow down time when boss is hit
+
+I'll make the game even harder
+- trails
+- trails for paused homing bullet
+- giant bullet bounce trail
+- laser rail gun
+- minishoot adventures
+-->
+<head>
+	<title>Purge Demo</title>
+    <link rel="icon" id="__favicon"/>
+	<style>
+body, html {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+body {
+    background-color: rgb(36, 41, 47);
+    overflow: hidden;
+}
+
+main {
+	width: 100vw;
+	height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.expand {
+	width: 100%;
+	height: 100%;
+}
+
+canvas {
+    cursor: none;
+}
+
+#logger {
+	position: absolute;
+	left: .5rem;
+	top: .5rem;
+	box-sizing: border-box;
+	background: white;
+	padding: .5rem;
+	display: none;
+	flex-direction: column;
+	border: 2px solid black;
+	border-radius: .5rem;
+	font-family: arial;
+	overflow: scroll;
+	max-height: calc(100vh - 50px);
+}
+
+.video::-webkit-media-controls-panel {
+    background-image: linear-gradient(transparent, transparent) !important;
+    color: black !important;
+    /*https://opensource.apple.com/source/WebCore/WebCore-1889.1/css/mediaControls.css.auto.html*/
+}
+
+	</style>
+</head>
+<body>
+	<main></main>
+	<div id="logger"></div>
+	<script>
+function log(message) {
+	logger.appendChild(UI.element('span', '', {}, {textContent: message}))
+    console.log(message)
+}
+
+function main() {
+	CTime.init()
+    const MAIN = new Main()
+	MAIN.favicon()
+    MAIN.start()
+    let lastTime = CTime.now(),
+        currentTime = null
+	const loop = () => {
+        currentTime = CTime.now()
+        MAIN.dt = currentTime - lastTime
+        lastTime = currentTime
+        MAIN.frame()
+		requestAnimationFrame(loop)
+	}
+	requestAnimationFrame(loop)
+}
+
+function randint(min, max) {
+    return Math.floor(Math.random() * (max - min + 1) + min);
+}
+
+function randintDouble(min, max) {
+    return (randint(0, 1) == 0 ? -1 : 1) * randint(min, max)
+}
+
+function fuzzyEquals(a, b, buffer=0.1) {
+	return Math.abs(a - b) <= buffer
+}
+
+function circleCollision(x1, y1, r1, x2, y2, r2) {
+    return ((x2-x1)**2 + (y2-y1)**2) <= (r1+r2)**2
+}
+
+function rayCastingCollision(point, poly, canvas_unit = 1, offset = [0, 0]) {
+    let n = poly.length;
+    let count = 0;
+    let x = point[0] * canvas_unit;
+    let y = point[1] * canvas_unit;
+
+    for (let i = 0; i < n; ++i) {
+        let currentVertex = poly[i];
+        let nextVertex = poly[(i + 1) % n];
+
+        let x1 = (currentVertex[0] + offset[0]) * canvas_unit;
+        let y1 = (currentVertex[1] + offset[1]) * canvas_unit;
+        let x2 = (nextVertex[0] + offset[0]) * canvas_unit;
+        let y2 = (nextVertex[1] + offset[1]) * canvas_unit;
+
+        if (((y1 <= y && y < y2) || (y2 <= y && y < y1)) && (x < (x2 - x1) * (y - y1) / (y2 - y1) + x1)) {
+            count++;
+        }
+    }
+    return count % 2 === 1;
+}
+
+function linePolygon(x1, y1, x2, y2, vertices, dx, dy) {
+    for (let c = 0; c < vertices.length; ++c) {
+		let x3 = vertices[c][0] + dx
+		let y3 = vertices[c][1] + dy
+		let x4 = vertices[((c + 1) == vertices.length) ? 0 : c + 1][0] + dx
+		let y4 = vertices[((c + 1) == vertices.length) ? 0 : c + 1][1] + dy
+		if (lineLine(x1, y1, x2, y2, x3, y3, x4, y4)) {
+			return true
+		}
+	}
+	return false
+}
+
+function lineLine(x1, y1, x2, y2, x3, y3, x4, y4, point = false) {
+    let u = ((x4-x3)*(y1-y3) - (y4-y3)*(x1-x3)) / ((y4-y3)*(x2-x1) - (x4-x3)*(y2-y1));
+    let t = ((x2-x1)*(y1-y3) - (y2-y1)*(x1-x3)) / ((y4-y3)*(x2-x1) - (x4-x3)*(y2-y1));
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+        return point ? [x1 + u * (x2 - x1), y1 + u * (y2 - y1)] : true;
+    }
+    return false
+}
+
+function lineRect(x, y, w, h, x1, y1, x2, y2, point=true) {
+    let a = lineLine(x1, y1, x2, y2, x, y, x, y + h, point)
+    if (a) {
+        return a
+    }
+    a = lineLine(x1, y1, x2, y2, x + w, y, x + w, y + h, point)
+    if (a) {
+        return a
+    }
+    a = lineLine(x1, y1, x2, y2, x, y, x + w, y, point)
+    if (a) {
+        return a
+    }
+    a = lineLine(x1, y1, x2, y2, x, y + h, x + w, y + h, point)
+    if (a) {
+        return a
+    }            
+    return false
+}
+
+function polygonCircleCollision(vertices, cx, cy, r, pdx=0, pdy=0) {
+    let next = 0
+    for (let i = 0; i < vertices.length; ++i) {
+        next = i + 1
+        if (next == vertices.length) {
+            next = 0
+        }
+        vc = vertices[i]
+        vn = vertices[next]
+        if (lineCircleCollision(vc[0] + pdx, vc[1] + pdy, vn[0] + pdx, vn[1] + pdy, cx, cy, r)) {
+            return true
+        }
+    }
+    return rayCastingCollision([cx, cy], vertices)
+}
+
+function lineCircleCollision(x1, y1, x2, y2, cx, cy, r) {
+    if (pointCircleCollision(x1, y1, cx, cy, r) || pointCircleCollision(x2, y2, cx, cy, r)) {return true;}
+    let len = dist(x1, y1, x2, y2)
+    let dot = (( (cx-x1)*(x2-x1) ) + ( (cy-y1)*(y2-y1) )) / Math.pow(len, 2);
+    let closestX = x1 + (dot * (x2 - x1))
+    let closestY = y1 + (dot * (y2 - y1))
+
+    if (!linePointCollision(x1, y1, x2, y2, closestX, closestY)) {return false}
+    return dist(closestX, closestY, cx, cy) <= r 
+}
+
+function linePointCollision(x1, y1, x2, y2, px, py, buffer=0.1) {
+    let d1 = dist(px, py, x1, y1)
+    let d2 = dist(px, py, x2, y2)
+    let len = dist(x1, y1, x2, y2)
+    if (d1 + d2 >= len - buffer && d1 + d2 <= len + buffer) {
+        return true
+    }
+    return false
+}
+
+function pointCircleCollision(x, y, cx, cy, r) {
+    return dist(x, y, cx, cy) <= r
+}
+
+function dist(x1, y1, x2, y2) {
+    return Math.sqrt((x1 - x2)**2 + (y1 - y2)**2)
+}
+
+function circle(ctx, center, radius, color, width, startAngle=0, endAngle=Math.PI*2) {
+    ctx.beginPath();
+    ctx.arc(center[0], center[1], radius, startAngle, endAngle, false);
+    if (width > 0) {
+        ctx.lineWidth = width;
+        ctx.strokeStyle = color;
+        ctx.stroke();
+    } else {
+        ctx.fillStyle = color;
+        ctx.fill();
+    }
+    ctx.closePath();
+}
+
+function drawText(ctx, x, y, text, font, color, lineWidth=0) {
+    ctx.font = font
+    ctx.fillStyle = color
+    ctx.strokeStyle = color
+    if (lineWidth > 0) {
+        ctx.lineWidth = lineWidth
+        ctx.strokeText(text, x, y)
+    } else {
+        ctx.fillText(text, x, y)
+    }
+}
+
+function polygon(context, color, width, linePoints, dx, dy, offset, canvas_unit) {
+    context.fillStyle = color;
+    context.strokeStyle = color;
+    context.beginPath();
+    context.moveTo((linePoints[0][0]+ dx +offset[0])*canvas_unit, (linePoints[0][1]+dy+offset[1])*canvas_unit)
+    for (let i = 1; i < linePoints.length; ++i) {
+        context.lineTo((linePoints[i][0] + dx + offset[0])*canvas_unit, (linePoints[i][1] + dy + offset[1])*canvas_unit)
+    }
+    if (width > 0) {
+        context.lineTo((linePoints[0][0] + dx + offset[0])*canvas_unit, (linePoints[0][1] + dy + offset[1])*canvas_unit)
+        context.lineWidth = width;
+        context.stroke();
+    } else {
+        context.fill();
+    }
+}
+
+function lerp(start, end, amt){
+    return (1 - amt) * start + amt * end;
+}
+
+function lerpAngle(from, to, weight) {
+    return from + shortAngleDistance(from, to) * weight
+}
+
+function shortAngleDistance(from, to) {
+    let max_angle = 180 * 2
+    let difference = (to - from) % max_angle
+    return (2 * difference % max_angle) - difference
+}
+
+function angleFromTo(x1, y1, x2, y2) {
+    return Math.atan2(-(y1 - y2), (x1 - x2)) * 180/Math.PI
+}
+
+function toRGBString(c, o=1) {
+    return `rgba(${c}, ${o})`
+}
+
+function mlToSecMin(millis, fix = 0, _format=(m, s) => {return `${m > 0 ? (m + ' minute' + (m > 1 ? 's' : '') + ' ') : ''}${s} seconds`}) {
+    let minutes = Math.floor(millis / 60000);
+    let seconds = ((millis % 60000) / 1000).toFixed(fix);
+    return _format(minutes, seconds)
+    //return minutes + ":" + (seconds < 10 ? '0' : '') + seconds;
+}
+
+function limitNum(num, max, min) {
+    return Math.max(Math.min(num, max), min)
+}
+
+function sin(angle) {
+    return Math.sin(angle * Math.PI/180)
+}
+
+function cos(angle) {
+    return Math.cos(angle * Math.PI/180)
+}
+
+class Init {
+    static key = {
+        homePaths: {
+            norm: 0,
+            wave1: 1
+        }
+    }
+    static init(main) {
+        let amp = 100
+        let per = 50
+        HomingBullet.addPath(new WavePathChanger(amp, per, 0, 0))
+    }
+}
+
+class Main {
+	static #theme = {
+        primaryBg: '215, 215, 205',
+        secondaryBg: '60, 60, 50',
+        primaryFg: '250, 240, 230',
+        secondaryFg: '145, 140, 120',
+        bulletFg: '240, 170, 120',
+        bulletBg: '255, 233, 201',
+        enemyBg: '110, 100, 90',
+        healthDamage: '210, 140, 125',
+        healthHeal: '250, 248, 230',
+        health: '250, 245, 220',
+        missleBg: '250, 90, 80',
+        missleFg: '255, 250, 230',
+        debugPacity: 0.5,
+        overlay: '255, 255, 255',
+        debug1: '255, 0, 0'
+	}
+
+    static poems = [ 
+        ["Surrender, futile resistance will lead to nothing"],
+        ["Death's embrace"],
+        ["Eternal Slumber"],
+        ["Inevtiable Doom"],
+        ["Return to whence thoust came from"],
+    ]
+
+    static get randomPoem() {
+        return this.poems[randint(0, this.poems.length - 1)]
+    }
+
+    #trueMouseX=0;
+    #trueMouseY=0;
+
+	constructor() {
+		this.main = document.querySelector('main')
+        this.overlay = UI.element('div', `pointer-events: auto; position: absolute; background-color: rgba(0, 0, 0, .5); display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 2rem; font-family: arial, sans-serif; color: rgb(50, 50, 30); user-select: none; visibility: hidden; opacity: 0; transition: opacity 250ms ease;`)
+        this.canvas = UI.element('canvas', 'position: absolute; background-color: white;');
+		this.context = this.canvas.getContext('2d');
+        this.canvasScale = 1
+        this.ratio = {width: 16, height: 9}
+        this.key = {}
+        this.mouse = {x: 0, y: 0, down: false}
+        this.cursor = new Crosshair()
+        this.dt = 1
+        this.targetFPS = 1000/30
+        this.manager = new StateManager(this)
+        
+        this.overlayTypes = {
+            NORMAL: 1,
+            DEATH: 2,
+        }
+
+        this.deathOverlay = new DeathOverlay()
+        this.currentOverlay = null
+	}
+
+    favicon() {
+        let favicon = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="31.06226" height="17.91646" viewBox="0,0,31.06226,17.91646"><g transform="translate(-224.46887,-171.04177)"><g data-paper-data="{&quot;isPaintingLayer&quot;:true}" fill="#efefef" fill-rule="nonzero" stroke="none" stroke-width="0" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" style="mix-blend-mode: normal"><path d="M227.72218,178.17582c0,-3.94002 3.22523,-7.13405 7.20377,-7.13405c3.97853,0 7.20376,3.19403 7.20376,7.13405c0,3.94002 -3.22523,7.13405 -7.20376,7.13405c-3.97853,0 -7.20377,-3.19403 -7.20377,-7.13405z"/><path d="M247.3049,184.70682c0,-2.27161 1.8415,-4.11311 4.11311,-4.11311c2.27161,0 4.11311,1.8415 4.11311,4.11311c0,2.27161 -1.8415,4.11311 -4.11311,4.11311c-2.27161,0 -4.11311,-1.8415 -4.11311,-4.11311z"/><path d="M239.06229,178.5941c0,-3.22133 2.61139,-5.83273 5.83272,-5.83273c3.22133,0 5.83273,2.6114 5.83273,5.83273c0,3.22133 -2.6114,5.83273 -5.83273,5.83273c-3.22133,0 -5.83272,-2.6114 -5.83272,-5.83273z"/><path d="M234.0429,185.24016c0,-3.69618 2.8611,-6.69253 6.39043,-6.69253c3.52934,0 6.39043,2.99635 6.39043,6.69253c0,3.69618 -6.34396,3.71807 -6.34396,3.71807c0,0 -6.43691,-0.02189 -6.43691,-3.71807z"/><path d="M224.46887,185.10073c0,-3.83059 2.96513,-6.9359 6.62281,-6.9359c3.65768,0 6.62282,3.10531 6.62282,6.9359c0,3.83059 -6.85519,3.58963 -6.85519,3.58963c0,0 -6.39043,0.24096 -6.39043,-3.58963z"/><path d="M243.69049,184.80248c0,-2.27161 1.8415,-4.11311 4.11311,-4.11311c2.27161,0 4.11311,1.8415 4.11311,4.11311c0,2.27161 -2.02741,3.50893 -4.29902,3.50893c-2.27161,0 -3.92721,-1.23732 -3.92721,-3.50893z"/></g></g></svg>'
+        __favicon.href = 'data:image/svg+xml;base64,'+btoa(new XMLSerializer().serializeToString(UI.html(favicon)))
+    }
+
+    showOverlay(type=this.overlayTypes.NORMAL, params={}) {
+        this.overlay.style.visibility = 'visible'
+        this.overlay.style.opacity = '1'
+        switch (type) {
+            case this.overlayTypes.DEATH:
+                this.deathOverlay.enter(this.overlay, params)
+                this.currentOverlay = this.deathOverlay
+                break;
+            case this.overlayTypes.NORMAL:
+            default:
+                this.currentOverlay = null
+                break;
+        }
+    }
+
+    hideOverlay() {
+        if (this.currentOverlay) { this.currentOverlay.exit(); this.currentOverlay = null }
+        this.overlay.style.opacity = '0'
+        CTime.createTimeout(() => {
+            this.overlay.style.visibility = 'hidden'
+        }, 250)
+    }
+
+	static get theme() {
+		return this.#theme 
+	}
+
+    onkeypress(e) {
+        this.key[e.key] = true
+    }
+
+    onkeyup(e) {
+        this.key[e.key] = false
+    }
+
+    onmousemove(e) {
+        this.onmouse(e)
+    }
+
+    onmousedown(e) {
+        this.onmouse(e)
+        this.mouse.down = true
+        this.cursor.ondown()
+    }
+
+    onmousrelease(e) {
+        this.onmouse(e)
+        this.mouse.down = false
+        this.cursor.onup()
+    }
+
+    onblur(e) {
+        this.key = {}
+        this.mouse.down = false
+    }
+
+    onmouse(e) {
+        let rect = this.canvas.getBoundingClientRect();
+        this.mouse.x = e.clientX - rect.left;
+        this.mouse.y = e.clientY - rect.top;
+        this.cursor.setPos(this.mouse.x / this.canvasScale, this.mouse.y / this.canvasScale)
+        this.#trueMouseX = e.clientX
+        this.#trueMouseY = e.clientY
+    }
+
+    screenCoords(x, y, s=1, offset=[0, 0]) {
+        return [x/(this.canvasScale * s) - offset[0], y/(this.canvasScale * s) - offset[1]]
+    }
+
+	start() {
+        this.main.appendChild(this.canvas)
+        this.main.appendChild(this.overlay)
+
+		this.resize(this.ratio)
+		window.onresize = () => this.resize(this.ratio)
+        document.addEventListener('keydown', (e) => this.onkeypress(e))
+        document.addEventListener('keyup', (e) => this.onkeyup(e))
+        addEventListener('mousemove', (e) => this.onmousemove(e))
+        addEventListener('mousedown', (e) => this.onmousedown(e))
+        addEventListener('mouseup', (e) => this.onmousrelease(e))
+        addEventListener('blur', () => this.onblur())
+        document.addEventListener('visibilitychange', () => {if (document.visibilityState == 'visible') {this.onblur()}})
+        
+        Init.init(this)
+        this.manager.addState(new Playing(this))
+	}
+
+	resize(ratio) {
+        if (window.innerWidth > window.innerHeight){
+            this.canvas.style.height = window.innerHeight + 'px';
+            this.canvas.style.width = (this.canvas.offsetHeight * ratio.width/ratio.height) + 'px';
+            if (this.canvas.offsetWidth > window.innerWidth){
+                this.canvas.style.height = (window.innerWidth * .01 / ratio.width * ratio.height * 100) + 'px';
+                this.canvas.style.width  = (this.canvas.offsetHeight * ratio.width / ratio.height) + 'px';
+            }
+        } else {
+            this.canvas.style.width = window.innerWidth + 'px';
+            this.canvas.style.height = (this.canvas.offsetWidth * ratio.height/ratio.width) + 'px';
+        }		
+        this.canvas.width = Math.max(devicePixelRatio, 1.5) * ratio.width * 50
+		this.canvas.height = Math.max(devicePixelRatio, 1.5) * ratio.height * 50
+        this.canvasScale = this.canvas.offsetWidth / this.canvas.width
+        
+        let rect = this.canvas.getBoundingClientRect()
+        this.overlay.style.left = rect.x + 'px'
+        this.overlay.style.top = rect.y + 'px'
+
+        this.overlay.style.width = rect.width + 'px'
+        this.overlay.style.height =  rect.height + 'px'
+        // this.onmouse({clientX: this.#trueMouseX, clientY: this.#trueMouseY})
+	}
+
+	frame() {
+        this.context.clearRect(0, 0, this.canvas.width, this.canvas.height)
+        this.manager.frame(this.dt / this.targetFPS)
+        this.cursor.update(this.dt / this.targetFPS)
+        this.cursor.draw(this.context)
+	}
+
+    getKey(key) {
+        return this.key[key] | false
+    }
+
+    get viewport() {
+        return {
+            width: this.canvas.offsetWidth,
+            height: this.canvas.offsetHeight
+        }
+    }
+}
+
+class CTime {
+    static #paused = false
+    static #pausedTime = 0;
+    static #startTime = 0;
+
+    static init() {
+        this.#startTime = Date.now()
+        this.#paused = false
+        this.#pausedTime = 0
+    }
+
+    static now() {
+        return this.#paused ? (this.#pausedTime) : (Date.now() - this.#startTime - this.#pausedTime);
+    }
+
+    static pause() {
+        if (!this.#paused) {
+            this.#paused = true
+            this.#pausedTime = Date.now() - this.#startTime
+        }
+    }
+
+    static unpause() {
+        if (this.#paused) {
+            this.#paused = false
+            this.#startTime = Date.now() - this.#pausedTime
+            this.#pausedTime = 0
+        }
+    }
+
+    static set pause(bool) {
+        if (bool) {
+            CTime.pause()
+        } else {
+            CTime.unpause()
+        }
+    }
+
+    static get paused() {
+        return this.#paused
+    }
+
+    static createTimeout(handler, timeout) {
+        setTimeout(handler, timeout)
+    }
+}
+
+class CTimer {
+    #paused = false
+    #startTime = 0
+    #pausedTime = 0
+    #timeouts = []
+    #delta = 1
+    
+    #falseCurrentTime = 0
+    #falseLastTime = 0
+
+    constructor() {}
+
+    now() {
+        let actualTime = this.trueTime()
+        this.#falseCurrentTime += (actualTime - this.#falseLastTime) * this.#delta
+        this.#falseLastTime = actualTime
+        return Math.floor(this.#falseCurrentTime)
+    }
+
+    trueTime() {
+        return this.#paused ? (this.#pausedTime) : (Date.now() - this.#startTime - this.#pausedTime);        
+    }
+
+    init() {
+        this.#startTime = Date.now()
+        this.#falseLastTime = this.trueTime()
+    }
+
+    Pause() {
+        if (!this.#paused) {
+            this.#paused = true
+            this.#pausedTime = Date.now() - this.#startTime
+        }
+    }
+
+    Unpause() {
+        if (this.#paused) {
+            this.#paused = false
+            this.#startTime = Date.now() - this.#pausedTime
+            this.#pausedTime = 0
+        }
+    }
+
+    set pause(bool) {
+        if (bool) {
+            this.Pause()
+        } else {
+            this.Unpause()
+        }
+    }
+    
+    get pause() {
+        return this.#paused
+    }
+
+    setDelta(delta) {
+        this.#delta = delta
+    }
+
+    createTimeout(callback, delay) {
+        if (delay < 0) {
+            console.error("Delay cannot be negative number")
+            return;
+        }
+        this.#timeouts.push({"callback": callback, "time": this.now() + delay})
+        // return have to update when timeout removed. no...
+    }
+
+    clearTimeout(index) {
+        this.#timeouts.splice(index, 1)
+    }
+
+    getTimeouts() {
+        return this.#timeouts
+    }
+
+    clearTimeouts() {
+        this.#timeouts = []
+    }
+
+    update() {
+        let time = this.now()
+        for (let i = this.#timeouts.length - 1; i >= 0; i --) {
+            let t = this.#timeouts[i]
+            if (time >= t.time) {
+                t.callback()
+                // EEEE
+                this.#timeouts.splice(i, 1)
+            }
+            t = null
+        }
+        time = null
+    }
+}
+
+class Overlay {
+    constructor() {
+        this.element = UI.element('div', 'width: 100%; height: 100%; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;')
+    }
+
+    enter(parent) {parent.appendChild(this.element)}
+
+    exit() {this.element.remove()}
+}
+
+class DefaultOverlay extends Overlay {
+    constructor() {
+        super()
+        this.element.style.transition = 'opacity .2s ease'
+        this.element.style.opacity = '0'
+    }
+
+    enter(p, params) {
+        super.enter(p)
+        this.element.style.opacity = '1'
+    }
+
+    exit() {
+        this.element.style.opacity = '0'
+        CTime.createTimeout(() => super.exit(), 200)
+    }
+}
+
+class DeathOverlay extends DefaultOverlay {
+    constructor() {
+        super()
+        this.deathText = UI.element('span', 'color: rgb(205, 75, 70); transition: opacity 1s ease, filter .5s ease-in-out; opacity: 0; font-weight: bold; font-size: 3rem; filter: none;', {}, {textContent: 'All Systems Down'})
+        this.desc = UI.element('span', 'color: rgb(205, 75, 70); opacity: 0; transition: opacity 3s ease, filter 1s ease-out; font-weight: normal; filter: none; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center')
+        this.element.appendChild(this.deathText)
+        this.element.appendChild(this.desc)
+		this.element.style.transition += ', background-color 4s ease-in-out'
+        this.element.style.backgroundColor = 'transparent'
+        
+        this.videoContainer = UI.element('div', '', {style: 'width: 100%; height: calc(100% - 15rem); min-height: 10rem; object-fit: contain; box-sizing: border-box; padding: 2rem 5rem; display: flex; flex-direction: column; align-items: center; justify-content: center;'})
+        this.video = UI.element('video', '', {class: 'video', controls: true, style: 'height: 100% !important; width: auto !important;'})
+        this.videoContainer.appendChild(this.video)
+        this.element.appendChild(this.videoContainer)
+    }
+
+    setMessage(m) {
+        m.forEach((ln) => {this.desc.appendChild(UI.element('span', '', {}, {textContent: ln}))})
+    }
+    
+    enter(p, params) {
+        super.enter(p)
+        this.desc.appendChild(UI.element('span', 'font-size: 1.5rem', {}, {textContent: `You lasted for: ${mlToSecMin(params.time, 2)}`}))
+        this.setMessage(Main.randomPoem)
+        this.video.src = params.video
+        CTime.createTimeout(() => {
+            this.deathText.style.opacity = '1'
+            this.deathText.style.filter = 'drop-shadow(0px 0px .75rem currentColor)'
+			this.desc.style.opacity = '.5'
+			this.desc.style.filter = 'drop-shadow(0px 0px 3px currentColor)'
+			this.element.style.backgroundColor = 'rgba(16, 17, 17, .8)'
+            CTime.createTimeout(() => {
+                this.deathText.style.filter = 'drop-shadow(0px 0px 0.25rem currentColor)'
+            }, 3000)
+        }, 500)
+    }
+
+    exit() {
+        super.exit()
+        this.deathText.style.opacity = '0'
+		this.desc.style.opacity = '0'
+        this.deathText.style.filter = 'none'
+		this.desc.style.filter = 'none'
+        this.element.style.backgroundColor = 'transparent'
+        this.desc.innerHTML = ''
+    }
+
+}
+
+class Cursor {
+    constructor() {
+        this.x = 0
+        this.y = 0
+        this.held = false
+    }
+    
+    ondown() {
+        this.held = true
+    }
+    
+    onup() {
+        this.held = false
+    }
+
+    setPos(x, y) {
+        this.x = x
+        this.y = y
+    }
+
+    update(dt) {}
+
+    draw(context) {}
+
+    enter() {}
+
+    exit() {}
+}
+
+class Crosshair extends Cursor {
+    constructor(l=20, w=5, m=15) {
+        super()
+        
+        this.l = l
+        this.w = w
+        this.margin = m
+        this.scale = 1
+        this.scale2 = 1
+
+        this.rect1 = new Rect(0, 0, w, l)
+        this.rect2 = new Rect(0, 0, l, w)
+
+
+        this.target = {
+            l: this.l,
+            w: this.w,
+            margin: 10,
+            scale: .9
+        }
+
+        this.original = {
+            l: this.l,
+            w: this.w,
+            margin: m,
+            scale: 1
+        }
+
+        this.ease = 0.2
+    }
+
+    update(dt) {
+        if (this.held) {
+            this.l += (this.target.l - this.l) * this.ease
+            this.w += (this.target.w - this.w) * this.ease
+            this.margin += (this.target.margin - this.margin) * this.ease
+            this.scale += (this.target.scale * this.scale2 - this.scale) * this.ease
+        } else {
+            this.l += (this.original.l - this.l) * this.ease
+            this.w += (this.original.w - this.w) * this.ease
+            this.margin += (this.original.margin - this.margin) * this.ease
+            this.scale += (this.original.scale * this.scale2 - this.scale) * this.ease
+        }
+        this.rect1.width = this.w
+        this.rect1.height = this.l
+        this.rect2.width = this.l
+        this.rect2.height = this.w 
+    }
+
+    draw(c) {
+        c.fillStyle = toRGBString(Main.theme.primaryFg)
+        this.rect1.draw(c, 0, this.x - this.rect1.width * .5 * this.scale, this.y + this.margin, this.scale)
+        this.rect2.draw(c, 0, this.x + this.margin, this.y - this.rect2.height * .5 * this.scale, this.scale)
+        this.rect1.draw(c, 0, this.x - this.rect1.width * .5 * this.scale, this.y - this.margin - this.rect1.height * this.scale, this.scale)
+        this.rect2.draw(c, 0, this.x - this.rect2.width * this.scale - this.margin, this.y - this.rect2.height * .5 * this.scale, this.scale)
+        // circle(c, [this.x, this.y], this.w, 'red', 0)
+    }
+}
+
+class PathChanger {
+    changeX(offset) {
+        return 0
+    }
+
+    changeY(offset) {
+        return 0
+    }
+}
+
+class WavePathChanger extends PathChanger {
+    constructor(amplitude, period, phaseShift, verticalShift) {
+        super()
+        this.a = amplitude
+        this.b = 2 * Math.PI / period
+        this.c = phaseShift
+        this.d = verticalShift
+        // A sin(B(x + C)) + D
+    }
+    
+    get(x, o=0) {
+        return this.b * (x + o + this.c)
+    }
+
+    changeX(now, o) {
+        return this.a * cos(this.get(now, o)) + this.d
+    }
+
+    changeY(now, o) {
+        return this.a * sin(this.get(now, o)) + this.d
+    }
+}
+
+class State {
+    constructor(main) {
+        this.main = main
+    }
+
+    enter() {}
+    
+    exit() {}
+
+    frame(dt) {}
+}
+
+class StateManager {
+    #enter = true
+    constructor(main) {
+        this.states = []
+        this.currentStateIndex = null;
+    }
+
+    set autoEnter(v) {
+        this.#enter = v
+    }
+
+    set state(i) {
+        if (i == this.currentStateIndex) {
+            return;
+        }
+        if (this.currentStateIndex != null) {
+            this.states[this.currentStateIndex].exit()
+        }
+        this.currentStateIndex = i
+        if (this.#enter) {
+            this.states[this.currentStateIndex].enter()
+        }
+    }
+
+    setStateNoExit(i) {
+        if (i == this.currentStateIndex) {
+            return;
+        }
+        this.currentStateIndex = i
+        if (this.#enter) {
+            this.states[this.currentStateIndex].enter()
+        }        
+    }
+
+	get currentState() {
+		return this.states[this.currentStateIndex]
+	}
+
+    addState(s) {
+        this.states.push(s)
+        if (this.states.length == 1) {
+            this.state = 0
+        }
+    }
+
+    frame(dt) {
+        this.states[this.currentStateIndex].frame(dt)
+    }
+}
+
+/*
+https://lospec.com/palette-list/retrotronic
+https://lospec.com/palette-list/2bit-demichrome
+https://lospec.com/palette-list/hollow
+https://lospec.com/palette-list/robots-are-cool
+https://lospec.com/palette-list/monometalic
+*/
+class Playing extends State {
+    #overlay = false
+    #overlayDuration = 0
+    #overlayStartDuration = 0
+    #overlayAlpha = 0
+    #overlaySpeed = 0
+    
+    #recording = false
+    #videoStream = null
+    #mediaRecorder = null
+    #recordChunks = []
+
+    constructor(m) {
+        super(m)
+        this.box = new Rect(0, 0, 0, 0)
+        this.camera = new Camera()
+    	
+        this.scale = 1
+        this.targetScale = 1;
+
+        this.timer = new CTimer()
+
+        this.maxScale = 1.5
+        this.minScale = 1
+        this.mousePull = 120
+
+		this.grid = new GravityGrid()
+
+		this.boss = new Boss1(this.main, this, 0, 0)
+		this.player = new Player(this.main, 0, 0, this, this.boss)
+        this.player.timer = this.timer
+        this.boss.target = this.player
+		
+        this.bossHealth = new NamedHealth(0, 0, 0, 15, this.boss, 'Unfinished');
+		this.playerHealth = new ThemedHealth(15, 15, 0, 15, this.player)
+        
+        this.factor = 1
+        
+        this.videoData = null
+	}
+    playerDead() {
+        CTime.createTimeout(() => this.deathScreen(), 1700)
+    }
+    deathScreen() {
+        this.stopRecord()
+        new Promise((resolve, reject) => {
+            let count = 0
+            let i = setInterval(() => {
+                if (count > 10) {
+                    reject("Nuh uh, too many times")
+                    clearInterval(i)
+                }
+                if (this.videoData != null) {
+                    resolve(this.videoData)
+                    clearInterval(i)
+                }
+                count ++
+            }, 200)
+        }).then((m) => {
+            this.main.showOverlay(this.main.overlayTypes.DEATH, {time: this.timer.now(), video: m})
+        }).catch(() => {
+            this.main.showOverlay(this.main.overlayTypes.DEATH, {time: this.timer.now(), video: null})
+        })
+    }
+
+    setScale(s) {
+        this.scale = s
+        this.player.__scale = this.scale
+        this.boss.__scale = this.scale
+        this.box.__scale = this.scale
+        this.camera.__scale = this.scale
+    }
+
+    setScaleTarget(s) {
+        this.targetScale = Math.max(Math.min(s, this.maxScale), this.minScale)
+    }
+
+    prepRecord() {
+        this.#recording = true
+        this.#recordChunks = []
+        this.#videoStream = this.main.canvas.captureStream(30);
+        this.#mediaRecorder = new MediaRecorder(this.#videoStream, {videoBitsPerSecond: 2500000*2,});
+        this.#mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+                this.#recordChunks.push(e.data)
+            }
+        }
+        this.#mediaRecorder.onstop = () => {
+            this.videoData = this.getRecording()
+        }
+    }
+
+    startRecord() {
+        if (!this.#recording) {
+            this.prepRecord()
+        }
+        this.#mediaRecorder.start()
+    }
+
+    stopRecord() {
+        if (this.#recording) {
+            this.#mediaRecorder.stop()
+        }
+        this.#videoStream = null
+        this.#mediaRecorder = null
+        this.#recording = false
+    }
+
+    getRecording() {
+        let blob = new Blob(this.#recordChunks, {'type': 'video/mp4'})
+        this.#recordChunks = []
+        return URL.createObjectURL(blob)
+    }
+    
+    enter() {
+        this.startRecord()
+        let extraBorder = 80
+		this.box.x = - 450
+        this.box.y = - 120
+        this.box.width = (this.main.canvas.width + this.main.canvas.height)*.4  - this.box.x
+        this.box.height = (this.main.canvas.width + this.main.canvas.height)*.4 - this.box.y
+
+		this.bulletBox = new Rect(this.box.x - extraBorder, this.box.y - extraBorder, this.box.width + extraBorder * 2, this.box.height + extraBorder * 2)
+
+        this.player.x = this.box.centerX
+        this.player.y = this.box.centerY + this.box.height * 0.3
+		this.boss.x = this.box.centerX
+		this.boss.y = this.box.centerY
+		
+		this.bossHealth.width = this.main.canvas.width - 100
+		this.bossHealth.setY(this.main.canvas.height - this.bossHealth.height * 1.5);
+    	this.bossHealth.setX(this.main.canvas.width * .5);
+
+        this.playerHealth.width = this.main.canvas.width * .5 - 100
+        this.player.initBars({'boost': [this.playerHealth.rect.left, this.playerHealth.rect.bottom + 10, 500, this.playerHealth.rect.height]})
+
+        this.camera.ox = this.main.canvas.width * .5
+        this.camera.oy = this.main.canvas.height * .5
+        this.camera.x = this.player.x + (this.boss.x - this.player.x) * .5
+        this.camera.y = this.player.y + (this.boss.y - this.player.y) * .2
+        
+        let oof = 100
+        this.camera.lminx = this.box.x - oof
+        this.camera.lmaxx = this.box.width + this.box.x + oof
+        this.camera.lminy = this.box.y - oof
+        this.camera.lmaxy = this.box.y + this.box.height + oof
+        this.setScale(1)
+        this.setScaleTarget(1.1)
+
+        this.boss.initBullets(this.bulletBox, this.box)
+        this.player.initProjectiles(this.bulletBox, this.box)
+
+        this.boss.camera = this.camera
+        this.player.camera = this.camera
+        this.player.grid = this.grid
+
+        this.timer.init()
+		this.grid.init(this.box, this.box.width/25, this.box.height/25)
+        // this.grid.addObject(this.player)
+        this.grid.addObject(this.boss)
+        this.grid.addObject(this.player)
+
+        this.boss.start()
+	}
+
+    showOverlay(duration, alphaMult, speed=1) {
+        if (duration <= 0) {
+            this.#overlay = false
+            return;
+        }
+        this.#overlayAlpha = alphaMult
+        this.#overlaySpeed = speed
+        this.#overlay = true
+        this.#overlayDuration = duration
+        this.#overlayStartDuration = duration
+    }
+
+    frame(deltaTime) {
+        // this.main.context.globalCompositeOperation = this.player.getDamaged() ? 'lighter' : 'source-over'
+        this.timer.update()
+        this.timer.setDelta(this.player.delta * this.factor)
+        
+        const now = this.timer.now()
+        const dt = deltaTime * this.player.delta * this.factor
+        const offset = this.camera.get()
+
+        this.camera.update(dt)
+        this.player.update(dt, offset, now, deltaTime)
+        this.boss.update(dt, now)
+        this.player.updateBullets(dt, now)
+        this.boss.updateBullets(dt, now)
+
+        this.player.x = Math.min(Math.max(this.player.x, this.box.x), this.box.x + this.box.width)
+        this.player.y = Math.min(Math.max(this.player.y, this.box.y), this.box.y + this.box.height)
+        this.boss.limit(this.bulletBox)
+        
+        this.grid.update(dt)
+        this.player.updateBars(dt)
+
+        this.main.context.fillStyle = toRGBString(Main.theme.primaryBg)
+        this.main.context.fillRect(0, 0, this.main.canvas.width, this.main.canvas.height)
+        this.drawGameElements(offset)
+        if (this.#overlay) {
+            this.main.context.fillStyle = toRGBString(Main.theme.overlay, this.#overlayAlpha*this.#overlayDuration/this.#overlayStartDuration)
+            this.main.context.fillRect(0, 0, this.main.canvas.width, this.main.canvas.height)
+            this.#overlayDuration -= deltaTime * this.#overlaySpeed
+            if (this.#overlayDuration <= 0) {
+                this.#overlay = false
+            }
+        }
+        
+        this.drawUI(now)
+
+        this.camera.targetX = this.player.x + (this.main.mouse.x / (this.main.canvasScale * this.main.canvas.width) - 0.5) * this.mousePull
+        this.camera.targetY = this.player.y + (this.main.mouse.y / (this.main.canvasScale * this.main.canvas.height) - 0.5) * this.mousePull
+
+        this.setScale(this.scale + (this.targetScale - this.scale) * this.camera.ease)
+
+        this.getZoomScale(offset)
+    }
+
+    drawGameElements(offset) {
+        let rotate = (this.camera.rot != 0)
+        if (rotate) { 
+            this.main.context.save()
+            this.main.context.rotate(this.camera.rot)
+        }
+
+		this.grid.draw(this.main.context, offset, this.scale)
+
+        this.boss.draw(this.main.context, offset)
+        this.player.draw(this.main.context, offset)
+
+        this.player.drawBullets(this.main.context, offset)
+        this.boss.drawBullets(offset)
+
+        this.main.context.strokeStyle = toRGBString(Main.theme.secondaryBg, .3)
+        this.main.context.shadowBlur = 10
+        this.main.context.shadowColor = toRGBString(Main.theme.secondaryBg)
+        this.box.draw(this.main.context, 2, offset[0], offset[1])
+        this.main.context.shadowBlur = 0
+        if (rotate) {
+            this.main.context.restore()
+        }
+    }
+
+    drawUI(now) {
+		this.playerHealth.draw(this.main.context)
+        this.player.drawBars(this.main.context)
+        this.bossHealth.draw(this.main.context)
+        this.main.context.textAlign = "right"
+        drawText(this.main.context, this.main.canvas.width - 10, 25, now, '25px sans-serif', toRGBString(Main.theme.primaryFg, 0.5), 0)
+        this.main.context.textAlign = "start"
+    }
+
+    getZoomScale(offset) {
+
+        let viewport = this.main.viewport
+        /*
+        let bossRelPos = [
+            this.boss.x + offset[0] - this.camera.ox, 
+            this.boss.y + offset[1] - this.camera.oy
+        ]
+        let playerRelPos = [
+            this.player.x + offset[0] - this.camera.ox,
+            this.player.y + offset[1] - this.camera.oy
+        ]
+        let maxAbsX = Math.max(Math.abs(bossRelPos[0]), Math.abs(playerRelPos[0]))
+        let maxAbsY = Math.max(Math.abs(bossRelPos[1]), Math.abs(playerRelPos[1]))
+        let ratioX = maxAbsX / (viewport.width * 0.5)
+        let ratioY = maxAbsY / (viewport.height * 0.5)
+        // console.log(Math.max(ratioX, ratioY))
+        // console.log(playerRelPos[0])
+        this.setScaleTarget(Math.max(ratioX, ratioY))
+        */
+        // https://gamedev.net/forums/topic/672978-smash-bros-style-camera/5260672/
+        let x1 = Math.min(this.player.x, this.boss.x)
+        let x2 = Math.max(this.player.x, this.boss.x)
+        let y1 = Math.min(this.player.y, this.boss.y)
+        let y2 = Math.max(this.player.y, this.boss.y)
+        this.setScaleTarget(
+            1/Math.max((x2 - x1) / (viewport.width * .5) , (y2 - y1) / (viewport.height * .5))
+        )
+    }
+}
+
+class Rect {
+    /**
+     * @param {Number} x 
+     * @param {Number} y 
+     * @param {Number} width 
+     * @param {Number} height 
+     */
+    constructor(x, y, width, height) {
+        this.x = x
+        this.y = y
+        this.width = width
+        this.height = height
+        this.__scale = 1
+    }
+
+    get left() { return this.x }
+
+    set left(v) { this.x = v }
+    
+    get right() { return this.x + this.width }
+
+    set right(v) { this.x = v - this.width }
+
+    get top() { return this.y }
+
+    set top(v) { this.y = v }
+
+    get bottom() { return this.y + this.height }
+
+    set bottom(v) { this.y = v - this.height  }
+
+    get centerX() { return this.x + this.width * .5 }
+
+    set centerX(v) { this.x = v - this.width * .5}
+
+    get centerY() { return this.y + this.height * .5 }
+
+    set centerY(v) { this.y = v - this.height * .5}
+
+    /**
+     * Returns whenther the rect is colliding
+     * @param {Rect} rect 
+     * @return {Boolean}
+     */
+    colliderect(rect) {
+        return this.x + this.width > rect.x && rect.x + rect.width > this.x && this.y + this.height > rect.y && rect.y + rect.height > this.y;
+    }
+    
+    collidepoint(x, y){
+        return this.x + this.width > x && x > this.x && this.y + this.height > y && y > this.y;
+    }    
+
+    copy() { return new Rect(this.x, this.y, this.width, this.height) }
+
+    draw(context, strokeWidth=0, dx=0, dy=0, scale=1) {    
+        if (strokeWidth <= 0) {
+            context.fillRect((this.x*scale + dx)*this.__scale, (this.y*scale + dy)*this.__scale, this.width*scale*this.__scale, this.height*scale*this.__scale)
+        } else {
+            context.lineWidth = strokeWidth * this.__scale
+            context.strokeRect((this.x*scale + dx)*this.__scale, (this.y*scale + dy)*this.__scale, this.width*scale*this.__scale, this.height*scale*this.__scale)
+        }
+    }
+}
+
+class Polygon {
+    constructor(pos, points, scale=1.0) {
+        this.x = pos[0];
+        this.y = pos[1];
+        this.points = points;
+        this.scale = scale;
+        this.rescaledPoints = [];
+        this.linePoints = [];
+        this.angle = 0;
+        for (const point of this.points) {
+            if (point.length > 0){
+                this.rescaledPoints.push([point[0]*this.scale, point[1]*this.scale]);
+                this.linePoints.push([point[0]*this.scale, point[1]*this.scale])
+            } else {
+                this.rescaledPoints.push([]);
+                this.linePoints.push([]);
+            }
+        }
+        this.updateBoundingRect()
+        this.circleRadius = this.updateBoundingCircle()
+        this.onrotate = (d) => {}
+    }
+    
+    updateBoundingRect() {
+        let max = {width: Number.MIN_VALUE, height: Number.MIN_VALUE}
+        let min = {width: Number.MAX_VALUE, height: Number.MAX_VALUE}
+        for (let i = 0; i < this.linePoints.length; ++i) {
+            max.width = Math.max(max.width, this.linePoints[i][0]);
+            max.height = Math.max(max.height, this.linePoints[i][1]);
+            min.width = Math.min(min.width, this.linePoints[i][0]);
+            min.height = Math.min(min.height, this.linePoints[i][1]);
+        }
+        this.boundingRect = {x:  Math.round(min.width), y: Math.round(min.height), width: Math.round(max.width-min.width), height: Math.round(max.height-min.height)}
+        return this.boundingRect;
+    }
+    
+    updateBoundingCircle() {
+        return dist(this.boundingRect.width, this.boundingRect.height, 0, 0)
+    }
+
+    calculateAngle(x, y) {
+        let rot = Math.atan2(-(y - this.y), (x - this.x)) * 180/Math.PI
+        return rot
+    }
+
+    calculateAngleRealWorldPosition(position, canvas_unit, offset=[0, 0]) {
+        let delta = {x: position[0] - (this.x+offset[0])*canvas_unit, y: position[1] - (this.y+offset[1])*canvas_unit};
+        let rot = Math.atan2(-delta.y, delta.x) * 180/Math.PI;
+        return -rot;
+    }
+
+    draw(context, color, width, canvas_unit=1, offset=[0, 0], drawRect=false, fillIf=true) {
+		context.fillStyle = color;
+        context.strokeStyle = color;
+        context.beginPath();
+        context.moveTo((this.linePoints[0][0]+this.x+offset[0])*canvas_unit, (this.linePoints[0][1]+this.y+offset[1])*canvas_unit);
+        for (let i = 1; i < this.linePoints.length; ++i) {
+            context.lineTo((this.linePoints[i][0] + this.x + offset[0])*canvas_unit, (this.linePoints[i][1] + this.y + offset[1])*canvas_unit);
+        }
+        if (width > 0) {
+            context.lineTo((this.linePoints[0][0] + this.x + offset[0])*canvas_unit, (this.linePoints[0][1] + this.y + offset[1])*canvas_unit)
+            context.lineWidth = width;
+            context.stroke();
+        } else if (fillIf) {
+            context.fill();
+        }
+        if (drawRect) {
+            let box = this.boundingRect
+            context.lineWidth = 1;
+            context.strokeRect((box.x + this.x + offset[0]) * canvas_unit, (box.y + this.y + offset[1]) * canvas_unit, box.width*canvas_unit, box.height*canvas_unit);
+        }
+    }
+
+    rotatePoint(pointIndex, rotation) {
+        let myRotate = rotation * Math.PI/180;
+        let rotX = Math.cos(myRotate) * this.rescaledPoints[pointIndex][0] - Math.sin(myRotate) * this.rescaledPoints[pointIndex][1];
+        let rotY = Math.sin(myRotate) * this.rescaledPoints[pointIndex][0] + Math.cos(myRotate) * this.rescaledPoints[pointIndex][1];
+        return [rotX, rotY];
+    }
+
+    rotate(direction) {
+        if (Math.floor(this.angle) == Math.floor(direction%360)) {return;}
+        this.angle = direction%360
+        for (let i = 0; i < this.linePoints.length; ++i){
+            let rotated = this.rotatePoint(i, direction)
+            this.linePoints[i] = rotated;
+        }
+        this.updateBoundingRect()
+        this.circleRadius = this.updateBoundingCircle()
+        this.onrotate(direction)
+    }
+
+    collision(poly, canvas_unit, cc=true) {
+        if (cc && !circleCollision(this.x, this.y, this.circleRadius, poly.x, poly.y, poly.circleRadius)) {
+            return false;
+        }
+        for (const point of poly.linePoints){
+            if (rayCastingCollision([point[0] + poly.x, point[1] + poly.y], this.linePoints, canvas_unit, [this.x, this.y])){
+                return true;
+            }
+        }
+        for (const myPoint of this.linePoints){
+            if (rayCastingCollision([myPoint[0] + this.x, myPoint[1] + this.y], poly.linePoints, canvas_unit, [poly.x, poly.y])){
+                return true;
+            }
+        }
+        return false;
+    }
+
+    collidepoint(point, canvas_unit) {
+        return rayCastingCollision(point, this.linePoints, canvas_unit, [this.x, this.y]);
+    }
+
+    clone() {
+        return new Polygon([this.x, this.y], this.linePoints, 1)
+    }
+}
+
+class Bullet {
+	#spawnTrail = false
+	#spawner = null
+	#spawnDuration = 0
+	#lastSpawn = 0
+	#spawnAmount = 1
+    #invicibleTime = 0
+    #invicibleS = true
+    #startTime = 0
+    constructor(x, y, direction, speed) {
+        this.x = x;
+        this.y = y;
+        this.direction = direction;
+        this.speed = speed;
+        this.vel = {x: Math.cos(this.direction*Math.PI/180)*speed, y: -Math.sin(this.direction*Math.PI/180)*speed};
+        this.dead = false
+        this.died = false
+        this.invicible = true
+		this.damage = 1
+        this.crit = [4, 5]
+    }
+
+	changeDirection(o) {
+		this.direction = (this.direction + o)%360
+	}
+
+	initTrails(t, d, a=1) {
+		this.#spawnTrail = true
+		this.#spawner = t
+		this.#spawnDuration = d
+		this.#spawnAmount = a
+	}
+
+	getSpawner() {
+		return this.#spawner
+	}
+
+	spawnedTrail(amount, color=Main.theme.primaryFg, speed=randint(4, 5)*0.5, radius=randint(8, 11), rd=randint(1, 3)*0.1, od=0.008*randint(8, 11), friction=0.9, spread=randint(1, 4)*0.5, op=0.5) {
+		if (amount == 0) {
+			return;
+		}
+		this.getSpawner().particle(new CustomParticle(this.cx, this.cy, speed, (this.direction + 180) % 360, radius, rd, od, friction, spread, color, op))
+		this.spawnedTrail(amount - 1)
+	}
+
+	updateVelocity() {
+    	if (this.dead) {
+            return;
+        }
+        this.vel.x =  Math.cos(this.direction*Math.PI/180)*this.speed
+        this.vel.y = -Math.sin(this.direction*Math.PI/180)*this.speed
+    }
+
+    getCritDmg() {
+        return randint(this.crit[0], this.crit[1])
+    }
+
+    init(now, time) {
+        this.invicible = true
+        this.#startTime = now
+		this.#lastSpawn = this.#startTime
+        this.#invicibleTime = time
+        this.#invicibleS = true
+    }
+
+    getStartTime() {
+        return this.#startTime
+    }
+
+    update(dt, now) {
+        this.x += this.vel.x * dt;
+        this.y += this.vel.y * dt;
+        if (this.#invicibleS) {
+            if (now - this.#startTime >= this.#invicibleTime) {
+                this.invicible = false
+                this.#invicibleS = false
+            }
+        }
+        if (this.#spawnTrail && !this.dead) {
+			if (now - this.#lastSpawn >= this.#spawnDuration) {
+				this.#lastSpawn = now
+				this.spawnedTrail(this.#spawnAmount)
+			}
+		}
+    }
+
+    draw(context, scale, offset, color='black', r=5, lw=0, startAngle=0, endAngle = Math.PI * 2) {
+        circle(context, [(this.x + offset[0]) * scale, (this.y + offset[1]) * scale], r * scale, color, lw, startAngle, endAngle)
+    }
+
+    determineDeath(b, c) {
+        this.dead = true
+        this.die(b, c)
+    }
+
+    die(bullets, callback) {
+        callback(bullets.indexOf(this))
+	}
+    
+    limit(r) {
+        this.x = Math.min(Math.max(this.x, r.x), r.x + r.width)
+        this.y = Math.min(Math.max(this.y, r.y), r.y + r.height)
+    }
+    
+    get cx() {
+        return this.x
+    }
+
+    get cy() {
+        return this.y
+    }    
+}
+
+class Trail extends Bullet {
+    constructor(x, y, direction, speed) {
+        super(x, y, direction, speed)
+    }
+}
+
+class LifeBullet extends Bullet {
+    ranOutOfTime = false
+    constructor(x, y, d, s, life) {
+        super(x, y, d, s)
+        this.life = life
+    }
+
+    fadeDeath(b, c) {
+        this.die(b, c)
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        if ((now - this.getStartTime() >= this.life) && !this.dead) {
+            this.ranOutOfTime = true
+            this.dead = true
+        }
+    }
+
+    determineDeath(b, c) {
+        this.dead = true
+        if (this.ranOutOfTime) {
+            this.fadeDeath(b, c)
+        } else {
+            this.die(b, c)
+        }
+    }
+}
+
+class NormalBullet extends LifeBullet {
+    constructor(x, y, d, s, l) {
+        super(x, y, d, s, l)
+        this.opacity = 1
+        this.color = Main.theme.bulletBg
+        this.speed = s
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        this.updateVelocity()
+    }
+
+    get colorString() {
+        return `rgba(${this.color}, ${this.opacity})`
+    }
+
+    changeSpeed(o, max, min) {
+        this.speed = Math.max(Math.min(this.speed + o, max), min)
+    }
+
+    changeOpacity(o) {
+        this.opacity = Math.max(Math.min(this.opacity + o, 1), 0)
+    }
+}
+
+class TargetBullet extends NormalBullet {
+    constructor(x, y, target, direction, speed, life) {
+        super(x, y, direction, speed, life)
+        this.target = target
+        this.targetDirection = this.direction
+        this.turnEase = 0.5
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        this.direction += shortAngleDistance(this.direction, this.targetDirection) * this.turnEase * dt
+    }
+
+    checkCollision() {return false}
+}
+
+class NormalHomingBullet extends TargetBullet {
+    #path = 0
+    constructor(x, y, target, dir, spd, lf) {
+        super(x, y, target, dir, spd, lf)
+        this.path = HomingBullet.paths[this.#path]
+        this.pathOffset = 0
+    }
+
+    derivePath(path, offset) {
+        this.path = HomingBullet.paths[path]
+        this.pathOffset = offset
+    }
+
+    home(now) {
+        this.targetDirection = angleFromTo(this.target.cx + this.path.changeX(now, this.pathOffset), this.target.cy + this.path.changeY(now, this.pathOffset), this.x, this.y)
+    }
+}
+
+class PolygonBullet extends NormalBullet {
+    constructor(polygon, x, y, d, s, l) {
+        super(x, y, d, s, l)
+        this.polygon = polygon
+        this.targetDirection = this.direction
+        this.turnEase = 0.1
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        
+        this.polygon.x = this.x
+        this.polygon.y = this.y
+        this.polygon.rotate(this.toPolygonAngle(this.direction))
+        this.direction += shortAngleDistance(this.direction, this.targetDirection) * this.turnEase * dt;
+	}
+    
+    draw(c, s, o, lw=0) {
+        this.polygon.draw(c, this.colorString, lw, s, o)
+    }
+
+	checkCollision(p, t=null) {
+		if (t) {
+            if (t.passThrough) {
+                return false;
+            }
+        }
+        return !this.dead && this.polygon.collision(p, 1)
+	}
+
+    toPolygonAngle(d) {
+        return d
+    }    
+    
+	die(bullets, c) {
+		this.vel.x = 0
+		this.vel.y = 0
+        this.opacity = 0.7
+        this.ondeath()
+        let i = setInterval(() => {
+            this.changeOpacity(-0.1)
+            this.circleRadius += 0.5
+            if (this.opacity <= 0) {
+                clearInterval(i)
+                c(bullets.indexOf(this))
+            }
+        }, 1000/30)
+	}
+
+    fadeDeath(b, c) {
+        this.opacity = 0.8
+        this.ondeath()
+        let i = setInterval(() => {
+            this.changeOpacity(-0.1)
+            if (this.opacity <= 0) {
+                clearInterval(i)
+                c(b.indexOf(this))
+            }
+        }, 1000/30) 
+    }
+
+    ondeath() {}
+
+    oncrit() {}
+
+    onhit() {}
+}
+
+class HomingBullet extends PolygonBullet {
+    static paths = [new PathChanger()]
+
+    #home = false
+    #path = 0
+	constructor(x, y, polygon, target, l, startNoHomeTime=500) {
+        super(polygon, x, y, 0, 1, l)
+        this.t = target
+
+        this.lockonRadius = 100
+        this.turnEase = 0.5
+        
+        this.circleRadius = 5
+
+		this.frames = 0
+		this.dont = startNoHomeTime
+        
+        this.path = HomingBullet.paths[this.#path]
+        this.pathOffset = 0
+    }
+
+    static addPath(p) {
+        this.paths.push(p)
+    }
+
+    derivePath(path, offset) {
+        this.path = HomingBullet.paths[path]
+        this.pathOffset = offset
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        if (dist(this.cx, this.cy, this.t.cx, this.t.cy) <= this.lockonRadius) {
+            if (this.#home) {
+				this.home(now)
+			} else {
+				if (now - this.getStartTime() >= this.dont) {
+					this.#home = true
+				}
+			}
+        }
+
+        if (this.checkCollision(this.t.polygon, this.t)) {
+			this.dead = true
+            this.t.damage(this.damage, this.crit, () => this.onhit(), () => this.oncrit())
+		}
+		this.frames += dt
+    }
+
+    home(now) {
+        this.targetDirection = this.polygon.calculateAngle(this.t.x + this.path.changeX(now, this.pathOffset), this.t.y + this.path.changeY(now, this.pathOffset))
+    }
+
+    draw(context, scale, offset, w=0) {
+        if (!this.dead || this.ranOutOfTime) {
+            super.draw(context, scale, offset, w)
+        } else {
+            circle(context, [(this.cx + offset[0])*scale, (this.cy + offset[1])*scale], scale*this.circleRadius, this.colorString, w)
+        }
+    }
+}
+
+class PlayerBullet extends HomingBullet {
+    constructor(x, y, tx, ty, t, l, oh=null, oc=null, od=null) {
+        super(x, y, new PolygonEntity([x, y], [[0, 5], [-1, 4], [-2, 1], [-2, -2], [-1, -4], [1, -4], [2, -2], [2, 1], [1, 4]], 4), t, l)
+        if (oh) {
+            this.onhit = oh
+        }
+        if (oc) {
+            this.oncrit = oc
+        }
+        
+        this.tx = tx
+        this.ty = ty
+
+        this.speed = 8
+        this.maxSpeed = 25
+
+        this.direction = this.polygon.calculateAngle(this.tx, this.ty)
+        this.targetDirection = this.direction
+
+		this.damage = .75
+        this.crit = [2, 3]
+        
+        this.lockonRadius = 175
+        this.turnEase = 0.1
+        this.color = Main.theme.primaryFg
+        if (od) {
+            this.ondeath = od
+        }
+
+        this.pull = 10
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        if (this.frames < 20) {
+            this.changeSpeed(0.5*dt, this.maxSpeed, 0)
+            this.changeOpacity(-0.02 * dt)
+        } else {
+            this.changeSpeed(0.2*dt, this.maxSpeed, 0)
+            this.changeOpacity(0.05 * dt)
+        }
+    }
+    
+    toPolygonAngle(d) {
+        return -(d + 180) % 360 + 90
+    }
+
+    getTrail() {
+        return new PlayerBulletTrail(this)
+    }
+
+    draw(c, s, o) {
+        c.shadowBlur = 20;
+        c.shadowColor = toRGBString(Main.theme.bulletFg, .5);
+        super.draw(c, s, o)
+        c.shadowBlur = 0;
+        c.shadowColor = 'transparent'    
+    }
+}
+
+class PlayerBulletTrail extends Trail {
+    constructor(bullet) {
+        super(bullet.x, bullet.y, bullet.direction, 3)
+        this.bullet = bullet
+        this.polygon = bullet.polygon.clone()
+        this.opacity = .8
+        this.direction = this.bullet.direction
+        this.speed = 4
+		this.lifeTime = 500
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        this.direction += (this.bullet.direction - this.direction)*0.2
+        this.polygon.rotate(-(this.direction + 180) % 360 + 90)
+        this.polygon.x = this.x
+        this.polygon.y = this.y
+        this.vel.x =  Math.cos(this.direction*Math.PI/180)*this.speed
+        this.vel.y = -Math.sin(this.direction*Math.PI/180)*this.speed
+        this.speed += .5*dt
+        this.opacity -= (this.bullet.dead ? 0.2 : 0.05) *dt
+        if (this.opacity <= 0) {
+            this.dead = true
+        }
+		if (now - this.getStartTime() >= this.lifeTime) {
+			this.dead = true
+		}
+    }
+
+    draw(c, s, o) {
+        this.polygon.draw(c, `rgba(${this.bullet.color}, ${this.opacity})`, 0, s, o)
+    }
+}
+
+class BossBullet extends HomingBullet {
+    #waiting = true
+    constructor(x, y, t, l, startHomeTime=0, dirOveride=null, ease=0.1, onhit=null, lckr=500, wait=0, waitEase=0.75, speedMult=1) {
+        super(x, y, new PolygonEntity([x, y], [[0, 2], [-1, -2], [1, -2]], 10), t, l, startHomeTime)
+        if (onhit) {
+            this.onhit = onhit
+        }
+        this.speed = 10 * speedMult
+        this.maxSpeed = 30 * speedMult
+
+        if (dirOveride) {
+			this.direction = dirOveride
+		} else {
+			this.direction = this.polygon.calculateAngle(this.t.x, this.t.y)
+        }
+		this.targetDirection = this.direction
+
+		this.damage = 1
+        this.crit = [2, 3]
+        
+        this.lockonRadius = lckr
+        this.turnEase = ease
+        this.color = Main.theme.bulletBg
+
+        this.wait = wait
+        this.waitEase = waitEase
+        if (wait <= 0) {
+            this.#waiting = false
+            this.waitEase = 1
+        }
+    }
+    
+    home(now) {
+        if (!this.#waiting) {
+            super.home(now)
+        }
+    }
+
+    update(dt, now) {
+        super.update(dt * this.waitEase, now)
+        if (this.#waiting) {
+            if (now - this.getStartTime() >= this.wait) {
+                this.#waiting = false
+                this.waitEase = 1
+            }
+        } else {
+            this.changeSpeed(.2*dt, this.maxSpeed, 0)
+        }
+    }
+
+    toPolygonAngle(d) {
+        return -(d + 180) % 360 + 90
+    }
+
+    draw(c, s, o) {
+        let op = this.opacity
+        c.shadowBlur = 20;
+        c.shadowColor = toRGBString(Main.theme.bulletFg, .5);
+        this.color = Main.theme.bulletBg
+        super.draw(c, s, o)
+        c.shadowBlur = 0;
+        c.shadowColor = 'transparent'
+        this.color = Main.theme.bulletFg
+        this.opacity = .3
+        super.draw(c, s, o, s*5)
+        this.opacity = op
+    }
+	
+    spawnedTrail(amount, color) {
+		super.spawnedTrail(amount, Main.theme.bulletBg)
+	}
+}
+
+class BossDefaultBullet extends PolygonBullet {
+    constructor(x, y, hw, hh, direction, speed, life) {
+        super(new PolygonEntity([x, y], [[-hw, hh], [-hw, -hh], [hw, -hh], [hw, hh]]), x, y, direction, 2, life)
+        this.maxSpeed = speed
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        this.changeSpeed(0.2 * dt, this.maxSpeed, 0)
+    }
+
+    draw(c, s, o)  {
+        c.fillStyle = 'red'
+        super.draw(c, s, o, 0)
+    }
+}
+
+class PausedHomingBullet extends NormalHomingBullet {
+    #move = false
+    #trueSpeed = 0
+    #home = false
+    #endHover = null
+	#trueHome = 0;
+    constructor(x, y, targ, dir, spd, lf, jumpX, jumpY, je=0.1, wait=500, waitHome=900, onhit=null) {
+        super(x, y, targ, dir, spd, lf)
+        this.turnEase = 0.07
+        this.#trueHome = this.turnEase
+		this.wait = wait
+        this.waitHome = waitHome
+        this.#trueSpeed = this.speed
+        this.maxSpeed = (this.speed * 3 + 5) * 0.9
+        this.jx = jumpX
+        this.jy = jumpY
+        this.je = je
+        this.radius = 7
+        this.damage = 1
+		
+		this.lastPos = []
+		this.posMaxIdx = 5
+		this.trailWidth = this.radius * 0.8
+		
+        if (onhit) {
+            this.onhit = onhit
+        }
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        if (!this.#move) {
+            this.speed = 0
+            this.x += (this.jx - this.x) * this.je
+            this.y += (this.jy - this.y) * this.je
+            if (now - this.getStartTime() >= this.wait) {
+                this.#move = true
+                this.speed = this.#trueSpeed
+                this.#endHover = now
+            }
+        } else {
+            if (this.#home) {
+				this.turnEase = this.#trueHome
+                this.home(now)
+            } else {
+                if (now - this.#endHover >= this.waitHome) {
+                    this.#home = true
+                } else {
+					this.turnEase = 0.1
+					this.home(now)
+				}
+            }
+            this.changeSpeed(0.75 * dt, this.maxSpeed, 0)
+        }
+        if (this.checkCollision() && !this.dead) {
+            this.target.damage(this.damage, this.crit, () => {})
+            this.dead = true
+            this.onhit()
+        }
+    }
+
+    init(now, t=50) {
+        super.init(now, t)
+        this.jx += this.x
+        this.jy += this.y
+    }
+
+    spawnedTrail(a) {
+        let rd = 0.2
+        let od = 0.05
+        super.spawnedTrail(a, Main.theme.missleBg, -randint(3, 5), randint(9, 10)*0.5, rd, od, 1, randint(-2, 2), 0.2)
+    }
+
+    draw(c, s, o) {
+		c.shadowBlur = this.radius * 2
+        c.shadowColor = toRGBString(Main.theme.missleBg, 1)
+        super.draw(c, s, o, toRGBString(Main.theme.missleFg, this.opacity), this.radius, 0, ((-this.direction - 135)%360)*Math.PI/180, Math.PI/180*((-this.direction + 135)%360))
+        c.shadowBlur = 0
+        c.shadowColor = 'transparent'
+    }
+
+    checkCollision(t=null) {
+		if (t) {
+            if (t.passThrough) {
+                return false;
+            }
+        }        
+        return polygonCircleCollision(this.target.polygon.linePoints, this.x, this.y, this.radius, this.target.polygon.x, this.target.polygon.y);
+    }
+    
+    onhit() {}
+
+    ondeath() {}
+	
+    die(bullets, c) {
+		this.vel.x = 0
+		this.vel.y = 0
+        this.opacity = 0.7
+        this.ondeath()
+        let i = setInterval(() => {
+            this.changeOpacity(-0.1)
+            this.radius += 0.5
+            if (this.opacity <= 0) {
+                clearInterval(i)
+                c(bullets.indexOf(this))
+            }
+        }, 1000/30)
+	}
+
+    fadeDeath(b, c) {
+        this.opacity = 0.8
+        this.ondeath()
+        let i = setInterval(() => {
+            this.changeOpacity(-0.1)
+            if (this.opacity <= 0) {
+                clearInterval(i)
+                c(b.indexOf(this))
+            }
+        }, 1000/30) 
+    }
+}
+
+class Laser extends Bullet {
+    constructor(x, y, direction) {
+        super(x, y, direction, 1)
+        this.ex = this.x
+        this.ey = this.y
+        this.width = 3
+        this.blur = 3
+        this.border = Main.theme.missleBg
+        this.color = Main.theme.missleFg
+        this.reachDist = 10000
+        
+        this.polygon = new Polygon([this.x, this.y], [
+            [this.signX() * this.width, this.signY() * this.width],
+            [ - this.signX() * this.width, - this.signY() * this.width],
+            [(this.ex - this.x) - this.signX() * this.width, (this.ey - this.y) - this.signY() * this.width],         
+            [(this.ex - this.x) + this.signX() * this.width, (this.ey - this.y) + this.signY() * this.width]
+        ]);
+
+        this.cooldown = 200
+        this.hitable = true
+        this.lastTime = 0
+        this.passThrough = true
+        this.colliding = false
+    }
+
+    signX() {
+        return Math.sin(this.direction * Math.PI / 180)
+    }
+
+    signY() {
+        return Math.cos(this.direction * Math.PI / 180)
+    }
+
+    init(now, t=50) {
+        super.init(now, t)
+        this.ex = this.x
+        this.ey = this.y
+        this.lastTime = this.getStartTime() - this.cooldown
+        this.hitable = true
+    }
+
+    update(dt, now) {
+        if (!this.colliding || this.passThrough) {
+            let point = lineRect(this.__manager.secondaryRect.x, this.__manager.secondaryRect.y, this.__manager.secondaryRect.width, this.__manager.secondaryRect.height, this.x, this.y, this.x + this.vel.x * this.__manager.sRd, this.y + this.vel.y * this.__manager.sRd)
+            this.ex = point[0]
+            this.ey = point[1]
+        }
+        this.polygon.linePoints[0][0] = this.signX() * this.width
+        this.polygon.linePoints[0][1] = this.signY() * this.width
+        this.polygon.linePoints[1][0] = - this.signX() * this.width 
+        this.polygon.linePoints[1][1] = - this.signY() * this.width
+        
+        this.polygon.linePoints[3][0] = (this.ex - this.x) + this.signX() * this.width
+        this.polygon.linePoints[3][1] = (this.ey - this.y) + this.signY() * this.width
+        this.polygon.linePoints[2][0] = (this.ex - this.x) - this.signX() * this.width
+        this.polygon.linePoints[2][1] = (this.ey - this.y) - this.signY() * this.width
+        
+        this.updateVelocity()
+        this.updateDamageTime(now)
+	}
+
+    updateDamageTime(now) {
+        if (this.hitable) { return; }
+        if (now - this.lastTime >= this.cooldown) {
+            this.hitable = true
+        }
+    }
+
+    resetDamageTime(now) {
+        this.hitable = false
+        this.lastTime = now
+    }
+
+    draw(c, s, o) {
+        c.lineWidth = this.width * s
+        c.strokeStyle = toRGBString(this.color)
+        c.shadowBlur = this.blur * s
+        c.shadowColor = toRGBString(this.border)
+        this.path(c, s, o)
+        c.shadowBlur = 0
+        c.shadowColor = 'transparent'
+        
+    }
+
+    path(c, s, o) {
+        /*c.beginPath()
+        c.moveTo((this.x + o[0])*s, (this.y + o[1])*s)
+        c.lineTo((this.ex + o[0])*s, (this.ey + o[1])*s)
+        c.stroke()
+        c.closePath()*/
+        this.polygon.draw(c, c.strokeStyle, 0, s, o)
+    }
+
+	collide(target) {
+        // return target.collision(this.polygon, 1, false)
+        for (let i = 0; i < target.linePoints.length; ++i) {
+            let n = i + 1
+            if (n >= target.linePoints.length) {n = 0}
+            let hit = lineLine(this.x, this.y, this.ex, this.ey, target.x + target.linePoints[i][0], target.y + target.linePoints[i][1], target.x + target.linePoints[n][0], target.y + target.linePoints[n][1], !this.passThrough)
+            if (hit) {
+                return (this.passThrough) ? true : hit
+            }
+        } 
+        return false
+        // return linePolygon(this.x, this.y, this.ex, this.ey, target.linePoints, target.x, target.y)
+	}
+}
+
+class ChargedLaser extends Laser {
+    constructor(x, y, d, t) {
+        super(x, y, d)
+        this.target = t
+        this.passThrough = false
+        this.hitBuffer = 2
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        let collide = this.collide(this.target.polygon)
+        if (collide) {
+            if (!this.passThrough) {
+                this.ex = collide[0] + this.signY() * this.hitBuffer
+                this.ey = collide[1] + this.signX() * this.hitBuffer
+            }
+            this.colliding = true
+            this.hitTarget(now)
+        } else {
+            this.colliding = false
+        }
+    }
+
+    hitTarget(now) {
+        if (!this.hitable) {return;}
+        this.target.damage(this.damage)
+        this.resetDamageTime(now)
+    }
+}
+
+class BulletManager {
+    #srect = null
+    constructor(main, rect, secondaryRect, timer) {
+        this.main = main;
+        this.rect = rect
+        this.#srect = secondaryRect
+        this.secondaryRect = secondaryRect
+        this.bullets = [];
+        this.timer = timer
+    }
+
+    set secondaryRect(r) {
+        this.#srect = r
+        if (r) {
+            this.sRd = dist(r.x, r.y, r.x + r.width, r.y + r.height)
+        }
+    }
+
+    get secondaryRect() {return this.#srect}
+
+    update(dt, now) {
+        for (let i = 0; i < this.bullets.length; ++i) {
+            this.bullets[i].update(dt, now);
+            if ((this.bullets[i].dead || !this.rect.collidepoint(this.bullets[i].x, this.bullets[i].y) && !this.bullets[i].invicible) && !this.bullets[i].died) {
+                this.bullets[i].died = true
+                this.bullets[i].limit(this.rect)
+                this.bullets[i].determineDeath(this.bullets, (index) => this.bullets.splice(index, 1))
+            }
+        }
+    }
+    
+    draw(context, offset=[0, 0], scale) {
+        for (const bullet of this.bullets) {
+            bullet.draw(context, scale, offset);
+        }
+    }
+    
+    bullet(b) {
+        this.bullets.push(b)
+        b.__manager = this
+        b.init(this.timer.now())
+    }
+}
+
+class Particle {
+    #startTime
+    constructor(x, y, direction, speed) {
+        this.x = x
+        this.y = y
+        this.vel = {
+            x: Math.cos(direction*Math.PI/180)*speed,
+            y: Math.sin(direction*Math.PI/180)*speed
+        }
+        this.color = 'black'
+        this.dead = false
+    }
+
+    init(now) {
+        this.#startTime = now
+    }
+
+    getStartTime() {
+        return this.#startTime
+    }
+
+    update(dt, now) {
+        this.x += this.vel.x * dt
+        this.y += this.vel.y * dt
+    }
+
+    draw(context, offset, scale, r=5, color=this.color) {
+        circle(context, [(this.x + offset[0])*scale, (this.y + offset[1])*scale], r*scale, color, 0)
+    }
+}
+
+class BulletParticle extends Particle {
+    constructor(x, y, direction, speed, color='0, 0, 0', life=500) {
+        super(x, y, direction, speed)
+        this.life = life;
+        this.time;
+        this.color = color
+        this.opacity = 1
+    }
+    
+    update(dt, now) {
+        super.update(dt, now)
+        this.opacity = 1 - (now - this.getStartTime())/this.life
+        if (now - this.getStartTime() >= this.life) {
+            this.dead = true
+        }
+    }
+
+    draw(context, offset, scale, r=5) {
+        super.draw(context, offset, scale, r, `rgba(${this.color}, ${this.opacity})`)
+    }
+}
+
+class BulletTrailParticle extends Particle {
+    constructor(x, y, spread, speed) {
+        super(x, y, 0, speed)
+        this.vel.x = randint(-spread, spread)
+        this.vel.y = randint(-spread, spread)
+    }
+}
+
+class MovementParticle extends Particle {
+    constructor(x, y, spread, direction, speed, radius) {
+        super(x, y, 0, speed)
+        this.radius = radius
+        this.friction = 0.9
+        this.radiusDecrease = 0.3
+        this.opacity = 1
+        this.opacityDecrease = 0.07
+        this.minVel = 0.1
+        this.vel.x = randint(-spread, spread) + Math.cos(direction * Math.PI/180) * speed
+        this.vel.y = randint(-spread, spread) + Math.sin(direction * Math.PI/180) * speed
+    }
+
+    update(dt, now) {
+        super.update(dt, now)
+        this.vel.x *= this.friction
+        this.vel.y *= this.friction
+        this.radius -= this.radiusDecrease * dt
+        this.opacity -= this.opacityDecrease
+        if (this.opacity <= 0 || Math.abs(this.vel.x) + Math.abs(this.vel.y) < this.minVel || this.radius <= 0) {
+            this.dead = true
+        }
+    }
+
+    draw(c, o, s) {
+        // console.log('e')
+        super.draw(c, o, s, this.radius, toRGBString(Main.theme.primaryFg, this.opacity*0.5))
+    }
+}
+
+class CustomParticle extends Particle {
+	constructor(x, y, speed, direction, radius, rd, od, friction, spread=5, color=Main.theme.primaryFg, op=0.5) {
+		super(x, y, 0, speed)
+		this.radius = radius
+        this.vel.x = randint(-spread, spread) + Math.cos(direction * Math.PI/180) * speed
+        this.vel.y = randint(-spread, spread) + Math.sin(direction * Math.PI/180) * speed
+		this.color = color
+		this.opacity = 1
+		this.opacityDecrease = od
+		this.radiusDecrease = rd
+		this.friction = friction
+        this.opacityFactor = op
+	}
+
+	update(dt, now) {
+		super.update(dt, now)
+		this.vel.x *= this.friction
+		this.vel.y *= this.friction
+		this.radius -= this.radiusDecrease * dt
+		this.opacity -= this.opacityDecrease * dt
+		if (this.opacity <= 0 || Math.abs(this.vel.x) + Math.abs(this.vel.y) < this.minVel || this.radius <= 0) {
+            this.dead = true
+        }
+	}
+
+	draw(c, o, s) {
+    	super.draw(c, o, s, this.radius, toRGBString(this.color, this.opacity*this.opacityFactor))
+    }
+}
+
+class ParticleManager {
+    constructor(timer) {
+        this.particles = []
+        this.timer = timer
+    }
+
+    update(dt, now) {
+        for (let i = 0; i < this.particles.length; ++i) {
+            this.particles[i].update(dt, now)
+            if (this.particles[i].dead) {
+                this.particles.splice(i, 1)
+            }
+        }
+    }
+
+    particle(p) {
+        this.particles.push(p)
+        if (this.timer) {
+            p.init(this.timer.now())
+            return;
+        }
+        p.init()
+    }
+    
+    draw(context, offset, scale) {
+        this.particles.forEach((p) => p.draw(context, offset, scale))
+    }
+}
+
+class GravityGrid extends ParticleManager {
+    constructor() {
+        super(null)
+		this.spacing = 1
+        this.objects = []
+        this.pull = 100
+        this.width = 2
+        this.ax = 0
+        this.ay = 0
+        this.opacity = 0.1
+    }
+
+    addObject(obj) {
+        this.objects.push(obj)
+    }
+
+    removeObject(obj) {
+        this.objects.splice(this.objects.indexOf(obj))
+    }
+
+	init(rect, intervalX, intervalY) {
+        this.ax = Math.floor(rect.width/intervalX) + 1
+        this.ay = Math.floor(rect.height/intervalY) + 1
+        for (let y = 0; y < this.ay; ++y) {
+			this.particles.push([])
+            for (let x = 0; x < this.ax; ++x) {
+				this.particles[y].push(new GravityPoint(rect.x + x * intervalX, rect.y + y * intervalY, this))
+			}
+		}
+		this.spacing = (intervalX + intervalY)*0.5
+	}
+
+    update(dt) {
+        if (this.objects.length < 1) {
+            return;
+        }
+        this.particles.forEach((row) => {            
+            row.forEach((p) => {
+                p.attracted = false
+                collideLoop: for (let i = 0; i < this.objects.length; ++i) {
+                    if (p.collide(this.objects[i].cx, this.objects[i].cy, (this.objects[i].pull != undefined) ? this.objects[i].pull : this.pull)) {
+                        p.attracted = true
+                        break collideLoop
+                    }
+                }
+                this.objects.forEach((o) => {
+                    p.update(dt, (o.pull != undefined) ? o.pull : this.pull, o.x, o.y)
+                })
+            })
+        })
+    }
+
+	draw(c, o, s) {
+        if (this.particles.length < 1) {return;}
+        c.lineWidth = this.width
+        c.strokeStyle = toRGBString(Main.theme.secondaryFg, this.opacity)
+        c.beginPath()
+        for (let y = 0; y < this.particles.length; ++y) {
+            c.moveTo((this.particles[y][0].x + o[0]) * s, (this.particles[y][0].y + o[1]) * s)
+            for (let x = 0; x < this.particles[y].length; ++x) {
+                c.lineTo((this.particles[y][x].x + o[0]) * s, (this.particles[y][x].y + o[1]) * s)
+            }
+        }
+        c.stroke()
+        c.beginPath()
+        for (let x = 0; x < this.particles[0].length; ++x) {
+            c.moveTo((this.particles[0][x].x + o[0]) * s, (this.particles[0][x].y + o[1]) * s)
+            for (let y = 0; y < this.particles.length; ++y) {
+                c.lineTo((this.particles[y][x].x + o[0]) * s, (this.particles[y][x].y + o[1]) * s)
+            }
+        }        
+        c.stroke()
+	}
+}
+
+class GravityPoint extends Particle {
+    constructor(x, y, grid) {
+        super(x, y, 0, 0)
+		this.grid = grid
+		this.ox = x
+		this.oy = y
+		this.lerp = 0.1
+		this.vl = 0.2
+        this.speed = 20
+        this.min = 5
+		this.max = 50
+        this.attracted = false
+    }
+
+    collide(x, y, r) {
+        return dist(x, y, this.x, this.y) <= r
+    }
+
+	update(dt, brush, x, y) {
+		let distance = dist(this.ox, this.oy, x, y)
+		if (distance <= brush) {
+            this.attracted = true
+            if (distance < this.min) {
+				distance = this.min
+			}
+            let speed = this.speed * this.grid.spacing / (distance ** 2)
+			let dx = x - this.x
+			let dy = y - this.y
+			this.vel.x += (this.lerp*speed*dx - this.vel.x) * this.vl
+			this.vel.y += (this.lerp*speed*dy - this.vel.y) * this.vl
+ 			if (Math.abs(this.x - this.ox) > this.max) {
+				this.vel.x = 0
+			}
+			if (Math.abs(this.y - this.oy) > this.max) {
+				this.vel.y = 0
+			}
+		} else if (!this.attracted) {
+            this.vel.x += (this.lerp*(this.ox - this.x) - this.vel.x) * this.vl
+			this.vel.y += (this.lerp*(this.oy - this.y) - this.vel.y) * this.vl
+		}
+        this.x += this.vel.x * dt
+        this.y += this.vel.y * dt
+	
+	}
+
+	draw(c, o, s) {
+		super.draw(c, o, s, 1)
+	}
+}
+
+class PolygonEntity extends Polygon {
+    #spring = false
+    #springX = 0
+    #springY = 0
+    #springStiffness = 0
+    #springMass = 0
+    #springClamp = 3
+    #springDamping = 2
+    #springLength = 1
+    #springVelocity = {x: 0, y: 0}
+    #springAccel = {x: 0, y: 0}    
+    constructor(pos, points, scale) {
+        super(pos, points, scale)
+        this.vel = {x: 0, y: 0}
+        this.__scale = 1
+    }
+
+    springForce(direction, force, stiffness, mass) {
+        this.#springX = cos(direction) * force
+        this.#springY = sin(direction) * force
+        this.#springStiffness = stiffness
+        this.#springMass = mass
+        this.#springVelocity.x = 0
+        this.#springVelocity.y = 0
+        this.#springAccel.x = 0
+        this.#springAccel.y = 0
+        this.#spring = true
+    }
+
+    applySpring(dt) {
+        let positionMag = dist(this.#springX, this.#springY, 0, 0)
+        let velocityMag = dist(this.#springVelocity.x, this.#springVelocity.y, 0, 0)
+        if (Math.abs(positionMag) <= this.#springClamp && Math.abs(velocityMag) <= this.#springClamp) {
+            this.#spring = false
+            this.#springVelocity.x = 0
+            this.#springVelocity.y = 0
+            return;
+        }
+        let FspringX = -this.#springStiffness * (this.#springX - this.#springLength)
+        let FspringY = -this.#springStiffness * (this.#springY - this.#springLength)
+        let FdampingX = -this.#springDamping * this.#springVelocity.x
+        let FdampingY = -this.#springDamping * this.#springVelocity.y
+        this.#springAccel.x = (FspringX + FdampingX)/this.#springMass
+        this.#springAccel.y = (FspringY + FdampingY)/this.#springMass
+        this.#springVelocity.x += this.#springAccel.x * dt
+        this.#springVelocity.y += this.#springAccel.y * dt
+        this.#springX += this.#springVelocity.x * dt
+        this.#springY += this.#springVelocity.y * dt
+    }
+    
+
+    update(dt) {
+        this.x += (this.vel.x + this.#springVelocity.x) * dt
+        this.y += (this.vel.y + this.#springVelocity.y) * dt
+        if (this.#spring) {
+            this.applySpring(dt)
+        }
+    }
+
+    draw(context, color, width, canvas_unit=1, offset=[0, 0], fillIf=true) {
+        super.draw(context, color, width, canvas_unit*this.__scale, offset, false, fillIf)
+    }
+}
+
+class AlivePolygonEntity extends PolygonEntity {
+	#dead = false
+    constructor(pos, points, scale, health) {
+		super(pos, points, scale)
+		this.maxHealth = health
+		this.health = this.maxHealth
+		this.ondamage = (h, a) => {}
+		this.onheal = (h, a) => {}
+	}
+
+	damage(amount) {
+		if (this.health <= 0) {return;}
+        this.health = Math.max(this.health - amount, 0)
+		this.ondamage(this.health, amount)
+        if (this.health <= 0) {
+            this.#dead = true
+            this.ondeath()
+        }
+	}
+
+    ondeath() {}
+
+    get isDead() {return this.#dead}
+
+	heal(amount) {
+		this.health = Math.min(this.health + amount, this.maxHealth)
+		this.onheal(this.health, amount)
+	}
+}
+
+class Healthbar {
+	constructor(x, y, w, h, target) {
+		this.target = target
+		this.ratio = this.target.health/this.target.maxHealth
+		this.rect = new Rect(x, y, w, h)
+		this.healthChangeRect = new Rect(0, 0, this.ratio*this.rect.width, this.rect.height)
+		this.healthFillRect = new Rect(0, 0, this.ratio*this.rect.width, this.rect.height)
+		this.bg = 'rgba(62, 67, 79, .1)'
+		this.fill = 'rgb(52, 235, 137)'
+		this.border = 'rgb(62, 72, 79)'
+        this.healthDamage = 'rgb(252, 186, 3)'
+        this.healthHeal = 'rgb(50, 168, 82)'
+        this.healthChange = this.healthDamage
+		this.borderWidth = 2
+        this.target.polygon.ondamage = (_, a) => this.change(_, -a)
+        this.target.polygon.onheal = (_, a) => this.change(_, a)
+        this.ease = 0.02
+	}
+
+	draw(context, offset=[0, 0]) {
+        
+        context.fillStyle = this.bg
+        this.rect.draw(context, 0, offset[0], offset[1])
+		
+        if (Math.floor(this.healthChangeRect.width) != Math.floor(this.healthFillRect.width)) {
+            context.fillStyle = this.healthChange;
+            this.healthChangeRect.width = Math.floor(lerp(this.healthChangeRect.width, this.healthFillRect.width, this.ease));
+            this.healthChangeRect.height = this.rect.height
+            this.healthChangeRect.draw(context, 0, offset[0] + this.rect.x, Math.floor(offset[1]) + this.rect.y)
+        }
+        // this.healthChangeRect.draw(c, lw, dx, dy, sc)
+        
+        context.fillStyle = this.fill
+        this.healthFillRect.draw(context, 0, offset[0] + this.rect.x, offset[1] + this.rect.y)
+		
+        context.strokeStyle = this.border
+		if (this.borderWidth > 0) {
+            this.rect.draw(context, this.borderWidth, offset[0], offset[1])
+        }
+
+	}
+
+    change(h, a) {
+        this.healthChange = (a > 0) ? this.healthHeal : this.healthDamage
+        this.ratio = this.target.health/this.target.maxHealth
+        this.healthChangeRect.width = Math.max(this.healthFillRect.width, this.healthChangeRect.width);
+        
+        this.healthFillRect.width = this.ratio * this.rect.width
+    }
+
+	set width(w) {this.rect.width = w; this.change(); this.change()}
+
+	set height(h) {
+        this.rect.height = h
+        this.healthFillRect.height = h
+        this.healthChangeRect.height = h
+    }
+
+	get height() {return this.rect.height}
+
+    get width() {return this.rect.width}
+
+
+	setX(x) {
+		this.rect.centerX = x
+	}
+
+	setY(y) {
+		this.rect.y = y
+	}
+}	
+
+class ThemedHealth extends Healthbar {
+    constructor(x, y, w, h, target) {
+        super(x, y, w, h, target)
+        this.bg = toRGBString(Main.theme.secondaryBg, .6)
+        this.fill = toRGBString(Main.theme.health)
+    
+        this.border = 'transparent'
+        this.healthDamage = toRGBString(Main.theme.healthDamage)
+        this.healthHeal = toRGBString(Main.theme.healthHeal)
+
+        this.border = 'transparent'
+        this.borderWidth = 0
+    }
+}
+
+class NamedHealth extends ThemedHealth {
+	constructor(x, y, w, h, t, name, font='20px arial') {
+		super(x, y, w, h, t)
+		this.name = name
+		this.font = font
+		this.textMarginY = -5
+        this.textMarginX = 10
+	}
+	draw(context, offset) {
+		super.draw(context, offset)
+		drawText(context, this.rect.x + this.textMarginX, this.rect.y + this.textMarginY, this.name, this.font, this.bg, 0)
+	}
+}
+
+class StatBar {
+    #value
+    #maxValue
+    #minValue
+    constructor(x, y, w, h, v, max, min) {
+        this.rect = new Rect(x, y, w, h)
+        
+        this.#value = v
+        this.#maxValue = max
+        this.#minValue = min
+        this.ratio = (this.#value + this.#minValue)/this.#maxValue
+        this.easedRatio = this.ratio
+
+		this.bg = toRGBString(Main.theme.secondaryBg, .6)
+		this.fill = toRGBString(Main.theme.health)
+
+        this.ease = 0.1
+    }
+
+    update(dt) {
+        this.easedRatio = lerp(this.easedRatio, this.ratio, this.ease*dt)
+    }
+
+    draw(context, offset=[0, 0]) {
+        let r = this.rect.width
+        
+        context.fillStyle = this.bg
+        this.rect.draw(context, 0, offset[0], offset[1], 1)
+        
+        context.fillStyle = this.fill
+        this.rect.width = Math.floor(r * this.easedRatio)
+        this.rect.draw(context, 0, offset[0], offset[1], 1)
+        
+        this.rect.width = r
+    }
+
+    updateRatio() {
+        this.ratio = (this.#value + this.#minValue)/this.#maxValue
+        this.easedRatio = this.ratio
+    }
+
+    get width() {return this.rect.width}
+    get height() {return this.rect.height}
+    set width(v) {this.rect.width = v}
+    set height(v) {this.rect.height = v}
+    set x(v) { this.rect.x = v }
+    set y(v) { this.rect.y = v }
+
+    set value(v) {
+        this.#value = Math.min(Math.max(v, this.#minValue), this.#maxValue)
+        this.updateRatio()
+    }
+
+    set max(v) {
+        this.#maxValue = v
+        this.updateRatio()
+    }
+
+    set min(v) {
+        this.#minValue = v
+        this.updateRatio()
+    }
+
+    get value() {return this.#value}
+
+    get max() {return this.#maxValue}
+
+    get min() {return this.#minValue}
+}
+
+class Player extends AlivePolygonEntity {
+    #lastDamaged = 0
+    #damaged = false
+    constructor(main, x, y, state, enemy) {
+        super([x, y], [[0, 2], [-1, -1], [0, -2], [1, -1]], 15, 100)
+        this.main = main
+        this.state = state
+
+        this.keybinds = {up: 'w', down: 's', right: 'd', left: 'a', boost: 'e'}
+        this.friction = .9;
+        this.max_vel = 14
+        this.min_vel = 1
+        this.speed = 7
+        
+        this.angleOffset = -90
+        this.targetAngle = 0
+        this.direction = this.targetAngle
+        this.angleEase = 0.5
+
+        this.bullets = new BulletManager(this.main, null, null, this.state.timer)
+        this.trails = new BulletManager(this.main, null, null, this.state.timer)
+        this.bulletParticles = new ParticleManager(this.state.timer)
+		this.canShoot = true
+		this.shootDelay = 220
+        this.shootIndex = 0
+        this.fuelIndex = 2
+		this.enemy = enemy
+
+        this.maxHealth = 50
+        this.health = this.maxHealth
+        this.knockback = 2
+
+        this.isMoving = false
+        this.boostDirection = this.direction
+        this.boost = 8
+        this.boostStart = this.max_vel + 2
+        this.boostMax = 30
+        this.boosting = false
+        this.boostCost = 0.1
+        this.boostCharge = 0.05
+        this.boostDamage = 0.2
+        this.boostWait = 1200
+        this.boostCanCharge = true
+        this.boostIsCharge = false
+        // value, max
+        this.boostBar = new StatBar(0, 0, 0, 0, 10, 10, 0)
+
+
+        this.pulls = {
+            normal: 50,
+            boost: 200,
+            recoil: 10,
+            recoilMass: 28,
+            recoilStiffness: 11
+        }
+        this.pull = this.pulls.normal
+
+        this.delta = 1
+        this.endDelta = 0.4
+        this.amp = 0.5
+        this.ampBack = 0.2
+        this.clampDelta = 0.05
+        this.boostDelta = 0.9
+        this.boostDeltaEase = 0.4
+
+        this.damageCooldown = 150
+    }
+
+    getDamaged() {
+        return this.#damaged
+    }
+
+    get polygon() {
+        return this
+    }
+
+    get cx() {
+        return this.x
+    }
+
+    get cy() {
+        return this.y
+    }
+
+    get invicible() {
+        return false
+    }
+
+    get passThrough() {
+        return false
+    }
+
+    initBars(e) {
+        this.boostBar.x = e['boost'][0]
+        this.boostBar.y = e['boost'][1]
+        this.boostBar.width = e['boost'][2]
+        this.boostBar.height = e['boost'][3]
+    }
+
+    initProjectiles(rect, srect) {
+        this.bullets.rect = rect
+        this.trails.rect = rect
+        this.bullets.secondaryRect = srect
+        this.trails.secondaryRect = srect
+    }
+
+    ondeath() {
+        this.state.playerDead()
+    }
+
+    update(dt, offset, now, trueDelta) {
+        super.update(dt)
+        if (this.#damaged) {
+            if (CTime.now() - this.#lastDamaged >= this.damageCooldown) {
+                this.#damaged = false
+            } else {
+                this.delta = lerp(this.delta, this.endDelta, this.amp*trueDelta)
+            }
+        } else {
+            if (this.boosting) {
+                this.delta = lerp(this.delta, this.boostDelta, this.boostDeltaEase*trueDelta)
+            } else {
+                this.delta = lerp(this.delta, 1, this.ampBack*trueDelta)
+            }
+        }
+        if (Math.abs(1 - this.delta) <= this.clampDelta) { this.delta = 1 }
+        
+        let axisX = this.main.getKey(this.keybinds.right) - this.main.getKey(this.keybinds.left)
+        let axisY = this.main.getKey(this.keybinds.down) - this.main.getKey(this.keybinds.up)
+        let axisBoost = this.main.getKey(this.keybinds.boost)
+
+        if (this.isDead) { axisX = 0, axisY = 0, axisBoost = 0, this.pull = this.pulls.normal }
+        
+        let joyDist = dist(axisX, axisY, 0, 0)
+        
+        if (joyDist > 0) {
+            axisX /= joyDist
+            axisY /= joyDist
+        }
+        
+        let distance = dist(this.vel.x, this.vel.y, 0, 0)
+        if (this.boosting) {
+            this.pull = this.pulls.boost
+            if (distance > this.boostMax) {
+                this.vel.x = this.boostMax*this.vel.x/(distance + 1);
+                this.vel.y = this.boostMax*this.vel.y/(distance + 1);
+            }
+            for(let i = randint(1, 2); i > 0; i --) {
+                this.bulletParticles.particle(new MovementParticle(this.x + this.linePoints[this.fuelIndex][0], this.y + this.linePoints[this.fuelIndex][1], randint(3, 4)*0.5, (this.boostDirection + 180)%360, .1, randint(5, 8)))
+            }
+            this.boostBar.value -= this.boostCost * dt
+            if (this.boostBar.value == this.boostBar.min) {
+                this.boosting = false
+                this.boostCanCharge = false
+                this.state.timer.createTimeout(() => {this.boostCanCharge = true}, this.boostWait)
+            }
+        } else {
+            this.pull = this.pulls.normal
+            if (this.boostCanCharge) {
+                this.boostBar.value += this.boostCharge * dt
+            }
+            if (distance > this.max_vel) {
+                this.vel.x = this.max_vel*this.vel.x/(distance + 1);
+                this.vel.y = this.max_vel*this.vel.y/(distance + 1);
+            }
+        }
+        
+        this.vel.x += axisX * this.speed * this.friction * dt;
+        this.vel.y += axisY * this.speed * this.friction * dt;
+        this.vel.x *= this.friction;
+        this.vel.y *= this.friction;
+        
+        this.isMoving = (distance) > this.min_vel
+        this.boostDirection = Math.floor(this.isMoving ? Math.floor(Math.atan2(this.vel.y, this.vel.x) * 180/Math.PI) : (this.direction + 90)%360)
+
+        if (axisBoost) {
+            if (this.boostBar.value > this.boostBar.min) {
+                if (!this.boosting) {
+                    this.boosting = true
+                    this.boostCanCharge = false
+                    this.vel.x = Math.cos(this.boostDirection * Math.PI / 180) * this.boostStart
+                    this.vel.y = Math.sin(this.boostDirection * Math.PI / 180) * this.boostStart
+                } else {
+                    this.vel.x += Math.cos(this.boostDirection * Math.PI / 180) * this.boost * dt
+                    this.vel.y += Math.sin(this.boostDirection * Math.PI / 180) * this.boost * dt
+                }
+            } else {
+                /*
+                this.damage(dt * this.boostDamage)
+                this.boosting = true
+                */
+            }
+        } else {
+            this.boosting = false
+            if (!this.boostIsCharge && !this.boostCanCharge && this.boostBar.value < this.boostBar.max) {
+                this.boostIsCharge = true
+                this.state.timer.createTimeout(() => {
+                    if (!this.boosting) {
+                        this.boostCanCharge = true
+                    }
+                    this.boostIsCharge = false
+                }, this.boostWait)
+            }
+        }
+
+        if (this.isDead) {return;}
+        
+        this.rotate_(offset)
+        if (this.main.mouse.down) {
+            this.shoot(offset, this.enemy, dt)
+        }
+    }
+
+    shoot(offset, enemy, dt) {
+		
+		if (!this.canShoot) {
+			return;
+		}
+        let m = this.main.screenCoords(this.main.mouse.x, this.main.mouse.y, this.__scale, offset)
+        /*let b = new PlayerBullet(this.x + this.linePoints[this.shootIndex][0], this.y + this.linePoints[this.shootIndex][1], m[0], m[1], enemy, (x, y, d) => {
+            for (let i = 0; i < randint(5, 6); ++i) {
+                this.bulletParticles.particle(new BulletParticle(x, y, d+randint(-15, 15)*5, 1, '235, 64, 52', 900))
+            }
+        }, (x, y, d) => {
+            for (let i = 0; i < randint(2, 3); ++i) {
+                this.bulletParticles.particle(new BulletParticle(x, y, d+randint(-10, 10)*5, .5, 500))
+            }
+        })*/
+        let b = new PlayerBullet(this.x + this.linePoints[this.shootIndex][0], this.y + this.linePoints[this.shootIndex][1], m[0], m[1], enemy, 5000, () => {this.camera.defaultShake(0.1);}, () => this.camera.defaultShake(0.3), () => {this.grid.removeObject(b)})
+        b.initTrails(this.bulletParticles, 50)
+		this.grid.addObject(b)
+        this.bullets.bullet(b)
+        this.trails.bullet(b.getTrail())
+       /*let langle = 0;
+       let dl = 500
+       for (let i = 0; i < 40; ++i) {
+        let b = new PlayerBullet(this.x + this.linePoints[this.shootIndex][0], this.y + this.linePoints[this.shootIndex][1], m[0] + dl*Math.cos(langle), m[1] + dl*Math.sin(langle), enemy, 5000, () => {this.camera.defaultShake(0.1);}, () => this.camera.defaultShake(0.3), () => {this.grid.removeObject(b)})
+        b.initTrails(this.bulletParticles, 50)
+		this.grid.addObject(b)
+        this.bullets.bullet(b)
+        this.trails.bullet(b.getTrail())
+        b = null
+        langle += Math.PI*10/180
+        }*/
+
+		this.canShoot = false
+        this.state.timer.createTimeout(() => {this.canShoot = true}, this.shootDelay)
+        m = null
+        b = null
+        // this.x += this.knockback * Math.cos((this.direction + 270)%360 * Math.PI/180) * dt
+        // this.y += this.knockback * Math.sin((this.direction + 270)%360 * Math.PI/180) * dt
+        this.camera.defaultShake(0.1)
+        this.springForce((this.direction + 90)%360, this.pulls.recoil, this.pulls.recoilStiffness, this.pulls.recoilMass)
+    }
+
+    drawBullets(context, offset) {
+        this.bullets.draw(context, offset, this.__scale)
+        this.trails.draw(context, offset, this.__scale)
+        this.bulletParticles.draw(context, offset, this.__scale)
+    }
+
+    updateBullets(dt, now) {
+        this.bullets.update(dt, now)
+        this.trails.update(dt, now)
+        this.bulletParticles.update(dt, now)
+    }
+
+    drawBars(c, o=[0,0]) {
+        this.boostBar.draw(c, o)
+    }
+
+    updateBars(dt) {
+        this.boostBar.update(dt)
+    }
+
+    rotate_(offset) {
+        this.targetAngle = this.calculateAngleRealWorldPosition([this.main.mouse.x, this.main.mouse.y], this.main.canvasScale*this.__scale, offset) + this.angleOffset
+        let d = shortAngleDistance(this.direction, this.targetAngle)
+        this.direction = this.direction + d*this.angleEase
+        this.direction %= 360
+        this.rotate(this.direction)
+    }
+
+    damage(d, a, oh=()=>{}, oc=()=>{}) {
+        if (this.invicible) {
+            return;
+        }
+        super.damage(d)
+        oh()
+        this.#lastDamaged = CTime.now()
+        this.#damaged = true
+        this.state.showOverlay(30, 0.2, 5)
+    }
+
+    draw(context, offset) {
+        context.shadowBlur = this.#damaged ? 5 : 3
+        context.shadowColor = toRGBString(Main.theme.secondaryFg, 1)
+        super.draw(context, toRGBString(Main.theme.primaryFg, this.#damaged ? 0.7 : 0.9), 0, 1, offset)
+        context.shadowBlur = 0
+        context.shadowColor = 'transparent'
+        if (!this.#damaged) {
+            circle(context, [(this.cx + offset[0])*this.__scale, (this.cy + offset[1])*this.__scale], this.__scale*5, toRGBString(Main.theme.secondaryFg, .25), 0)
+        }
+    }
+}
+
+class BossStateManager extends StateManager {
+    frame(dt, now) {
+        this.states[this.currentStateIndex].frame(dt, now)
+    }
+}
+
+class Boss {
+    #playingState
+    constructor(main, playingState) {
+        this.main = main
+        this.#playingState = playingState
+        this.states = new BossStateManager(this.main)
+        this.states.autoEnter = false
+    }
+
+    start() {
+        this.states.autoEnter = true
+        this.states.currentStateIndex = null
+        this.states.state = 0
+    }
+
+    getHolderState() {
+        return this.#playingState
+    }
+
+    get passThrough() {
+        return false;
+    }
+
+    get invicible() {
+        return false;
+    }
+
+    initBullets(rect, srect) {
+        this.bullets = new BulletManager(this.main, rect, srect, this.getHolderState().timer)
+    	this.particles = new ParticleManager(this.getHolderState().timer)
+	}
+
+    drawBullets(offset, scale) {
+        this.bullets.draw(this.main.context, offset, scale)
+    	this.particles.draw(this.main.context, offset, scale)
+	}
+
+    updateBullets(dt, now) {
+        this.bullets.update(dt, now)
+		this.particles.update(dt, now)
+    }
+
+    update(dt, now) {
+        this.states.frame(dt, now)
+    }
+
+    shoot(bullet) {
+        this.bullets.bullet(bullet)
+    }
+    
+    draw(context, offset) {}
+}
+
+Boss.State = class extends State {
+    constructor(boss, manager) {
+        super(boss.main)
+        this.boss = boss
+        this.manager = manager
+    }
+
+	easeEnd() {}
+
+	easeXend() {
+        if (this.boss.easeEnded.y) {
+            this.easeEnd()
+        }
+    }
+
+	easeYend() {
+        if (this.boss.easeEnded.x) {
+            this.easeEnd()
+        }
+    }
+
+    vanishEnd() {}
+	
+    vanishing() {}
+
+    frame(dt, now) {
+        super.frame(dt)
+    }
+}
+
+Boss.NextIndex = class extends Boss.State {
+    #nextIndex
+    constructor(i, b, m) {
+        super(b, m)
+        this.#nextIndex = i
+    }
+
+    trueExit() {
+        this.manager.setStateNoExit(this.#nextIndex)
+    }
+
+    get _nextIndex() { return this.#nextIndex }
+}
+
+Boss.Wait = class extends Boss.State {
+    constructor(b, m, w=1000, nextStateIndex=1) {
+        super(b, m)
+        this.wait = w
+        this.nextStateIndex = nextStateIndex
+        this.time = 0
+    }
+
+    enter() {
+        this.time = this.boss.getHolderState().timer.now()
+    }
+    
+    frame(dt, now) {
+        super.frame(dt, now)
+        if (now - this.time >= this.wait) {
+            this.manager.state = this.nextStateIndex
+        }
+    }
+}
+
+Boss.Death = class extends Boss.State {
+	constructor(b, m) {
+		super(b, m)
+	}
+}
+
+Boss.Multi = class extends Boss.State {
+    constructor(b, m) {
+        super(b, m)
+        this.states = new StateManager(this.boss.main)
+    }
+
+    enter() {
+        this.states.currentState.enter()
+    }
+
+    exit() {
+        this.states.currentState.exit()
+    }
+    
+    addState(s) {
+        this.states.addState(s)
+    }
+
+    easeEnd() {
+        super.easeEnd()
+        this.states.currentState.easeEnd()
+    }
+
+    vanishEnd() {
+        super.vanishEnd()
+        this.states.currentState.vanishEnd()
+    }
+
+    vanishing() {
+        super.vanishing()
+        this.states.currentState.vanishing()
+    }
+	
+    frame(dt, now) {
+        super.frame(dt, now)
+        this.states.currentState.frame(dt, now)
+    }    
+}
+
+class PolygonBoss extends Boss {
+    #limitRect = null
+    #spring = false
+    
+    #springX = 0
+    #springY = 0
+    #springStiffness = 0
+    #springMass = 0
+    #springClamp = 2.5
+    #springDamping = 2
+    #springLength = 1
+    #springVelocity = {x: 0, y: 0}
+    #springAccel = {x: 0, y: 0}
+
+    constructor(main, s) {
+        super(main, s)
+        this.polygon;
+        this.centerIndex = 0
+        this.crit = [10, 20]
+        this.critDefense = randint(this.crit[0], this.crit[1])
+		
+        this.tx = null
+		this.ty = null
+        
+        this.vanishX = null
+        this.vanishY = null
+        this.vanishDuration = null
+        this.vanishStartTime = null
+        
+        this.opacity = 1
+        this.targetOpacity = this.opacity
+        this.opacityEase = 0.1
+
+		this.easeFactor = 0.25
+		this.easeSmall = 5
+        this.easeEnded = {x: true, y: true}
+        this.vel = {x: 0, y: 0}
+        this.direction = 0
+
+        this.hiddenScale = 1
+        
+        this.safetyRadius = 50
+    }
+
+    springForce(direction, force, stiffness, mass) {
+        this.#springX = cos(direction) * force
+        this.#springY = sin(direction) * force
+        this.#springStiffness = stiffness
+        this.#springMass = mass
+
+        this.#springVelocity.x = 0
+        this.#springVelocity.y = 0
+        this.#springAccel.x = 0
+        this.#springAccel.y = 0
+        this.#spring = true
+    }
+
+    applySpring(dt) {
+        let positionMag = dist(this.#springX, this.#springY, 0, 0)
+        let velocityMag = dist(this.#springVelocity.x, this.#springVelocity.y, 0, 0)
+        if (Math.abs(positionMag) <= this.#springClamp && Math.abs(velocityMag) <= this.#springClamp) {
+            this.#spring = false
+            this.#springVelocity.x = 0
+            this.#springVelocity.y = 0
+            return;
+        }
+
+        let FspringX = -this.#springStiffness * (this.#springX - this.#springLength)
+        let FspringY = -this.#springStiffness * (this.#springY - this.#springLength)
+        let FdampingX = -this.#springDamping * this.#springVelocity.x
+        let FdampingY = -this.#springDamping * this.#springVelocity.y
+
+        this.#springAccel.x = (FspringX + FdampingX)/this.#springMass
+        this.#springAccel.y = (FspringY + FdampingY)/this.#springMass
+        
+        this.#springVelocity.x += this.#springAccel.x * dt
+        this.#springVelocity.y += this.#springAccel.y * dt
+        this.#springX += this.#springVelocity.x * dt
+        this.#springY += this.#springVelocity.y * dt
+    }
+
+    drawSaftey(c, o, s) {
+        circle(c, [(this.cx + o[0])*s, (this.cy + o[1])*s], this.safetyRadius*s, toRGBString(Main.theme.debug1, Main.theme.debugPacity), s)
+    }
+
+    resetCrit() {
+        this.critDefense = randint(this.crit[0], this.crit[1])
+    }
+
+	update(dt, now) {
+		if (this.polygon.isDead) {
+			return;
+		}
+        super.update(dt, now)
+		this.ease(dt)
+        this.vanish(dt, now)
+        if (this.#spring) {
+            this.applySpring(dt)
+        }
+        this.opacity += (this.targetOpacity - this.opacity)*this.opacityEase
+
+        this.x += (this.vel.x + this.#springVelocity.x) * dt
+		this.y += (this.vel.y + this.#springVelocity.y) * dt
+        
+        this.polygon.rotate(this.direction)
+	}
+
+    get cx() {
+        return this.x + this.polygon.linePoints[this.centerIndex][0]
+    }
+
+    get cy() {
+        return this.y + this.polygon.linePoints[this.centerIndex][1]
+    }
+
+	easeTo(x, y) {
+		this.tx = x
+		this.ty = y
+        this.easeEnded.x = false
+        this.easeEnded.y = false
+	}
+
+    vanishTo(x, y, d) {
+        this.vanishX = x
+        this.vanishY = y
+        this.vanishDuration = d
+        this.vanishStartTime = this.getHolderState().timer.now()
+        this.targetOpacity = 0
+    }
+
+    get invicible() {
+        return this.vanishStartTime != null
+    }
+
+    get passThrough() {
+        return this.vanishStartTime != null
+    }
+
+    vanish(dt, now) {
+        if (this.vanishStartTime == null) {return;}
+        this.states.currentState.vanishing()
+        if (now - this.vanishStartTime >= this.vanishDuration) {
+            this.x = this.vanishX
+            this.y = this.vanishY
+            this.targetOpacity = 1
+            this.vanishStartTime = null
+            this.vanishX = null
+            this.vanishY = null
+            this.vanishDuration = null
+            this.states.currentState.vanishEnd()
+        }
+    }
+
+	ease(dt) {
+        if (this.tx != null) {
+			this.vel.x = (this.tx - this.x) * this.easeFactor
+			if (Math.abs(Math.floor(this.tx - this.x)) <= this.easeSmall) {
+				this.tx = null
+                this.easeEnded.x = true
+				this.states.currentState.easeXend()
+            	this.vel.x = 0
+			}
+		}
+        if (this.ty != null) {
+			this.vel.y = (this.ty - this.y) * this.easeFactor
+            if (Math.abs(Math.floor(this.ty - this.y)) <= this.easeSmall) {
+				this.ty = null
+                this.easeEnded.y = true
+                this.states.currentState.easeYend()
+				this.vel.y = 0
+			}
+		}
+	}
+
+    damage(amount, crit=[0, 0], onhit = () => {}, ocrit = () => {}) {
+        // maybe add critDefense heals if not under constant attack?
+        if (this.invicible) {
+            return;
+        }
+        onhit()
+        this.critDefense -= amount
+        if (this.critDefense <= 0) {
+            this.resetCrit()
+            let c = randint(crit[0], crit[1])
+            this.polygon.damage(c)
+            ocrit(c)
+            c = null
+        }
+        this.polygon.damage(amount)
+	}
+
+	heal(amount) {
+        this.polygon.heal(amount)
+    }
+
+    drawBullets(offset) {
+        super.drawBullets(offset, this.polygon.__scale)
+    }
+    
+    bullet(b) {
+        this.bullets.bullet(b)
+    }
+
+    limit(rect) {
+        this.#limitRect = rect
+        this.x = Math.max(Math.min(this.x, rect.x + rect.width), rect.x)
+        this.y = Math.max(Math.min(this.y, rect.y + rect.height), rect.y)
+    }
+
+    get limitingRect() {
+        return this.#limitRect
+    }
+
+    get health() {
+        return this.polygon.health
+    }
+
+    get maxHealth() {
+        return this.polygon.maxHealth
+    }
+
+    set x(x) { this.polygon.x = x }
+
+    get x()  { return this.polygon.x }
+    
+    set y(y) { this.polygon.y = y }
+
+    get y()  { return this.polygon.y }    
+
+    set __scale(scale) {
+        this.polygon.__scale = scale
+        this.hiddenScale = scale
+    }
+}
+
+PolygonBoss.Rotating = class extends Boss.NextIndex {
+	#startTime = 0;
+    #startAngle = 0;
+    #change = 0
+    #rotationEnded = false
+	constructor(index, b, m, rotSpd, i, time=null) {
+		super(index, b, m)
+		this.rotateSpeed = rotSpd
+		this.shootInterval = i
+		this.angle = 0
+        this.rotateMax = time
+	}
+
+	enter() {
+		super.enter()
+        this.#rotationEnded = false
+		this.angle = this.boss.direction%360
+		this.#startTime = this.boss.getHolderState().timer.now()
+        this.#startAngle = this.angle%360
+        this.#change = 0
+	}
+
+	frame(dt, now) {
+        if (this.#rotationEnded) {
+            return;
+        }
+        this.angle += dt * this.rotateSpeed
+        this.#change += dt * this.rotateSpeed
+        
+        this.boss.direction = this.angle
+        
+        if (this.#change > this.rotateMax) {
+            this.endRotatation()
+        }
+        
+        if (now - this.#startTime >= this.shootInterval) {
+			this.shoot()
+			this.#startTime = now
+		}
+	}
+
+    getChange() {
+        return this.#change
+    }
+
+    endRotatation() {
+        this.#rotationEnded = true
+    }
+
+	shoot() {}
+
+	toAngle(d) {
+		return (-(d + 180) % 360 - 90)%360
+	}
+
+	exit() {
+		super.exit()
+	}
+}
+
+class Boss1 extends PolygonBoss {
+	constructor(main, s, x, y) {
+		super(main, s)
+        let scale = 10
+        this.polygon = new AlivePolygonEntity([x, y], [[0, 4], [-6, 6], [-4, 3], [-14, 5], [-4, -2], [-2, -6], [0, -2], [2, -6], [4, -2], [14, 5], [4, 3], [6, 6]], scale, 100)
+        this.furnace = new Polygon([x, y], [[-2, 0], [-6, 6], [0, 4], [6, 6], [2, 0], [0, 2]], scale)
+        this.wings = [-1, 1].map((sign) =>  new Polygon([x, y], [[4*sign, 3], [14*sign, 5], [4*sign, -2], [2*sign, 0]], scale))
+        this.spitter = new Polygon([x, y], [[0, 2], [-4, -2], [-2, -6], [0, -2], [2, -6], [4, -2]], scale)
+
+        this.polygon.onrotate = (d) => {
+            this.furnace.rotate(d)
+            this.spitter.rotate(d)
+            this.wings.forEach((p) => p.rotate(d))
+        }
+        
+        this.direction = 180
+
+        this.states.addState(new Boss.Wait(this, this.states, 1000, 1))
+        this.states.addState(new Boss1.Phase2(this, this.states))
+		
+		this.crit = [10, 15]
+        this.resetCrit()
+        
+        this.pull = 200
+
+        this.safetyRadius = 180
+	}
+
+    knockback(force, stiffness, dampening) {
+        this.springForce((this.toNormalizedAngle(this.direction) + 180)%360, force, stiffness, dampening)
+    }
+
+    update(dt, now) {
+		super.update(dt, now)
+    }
+
+	draw(context, offset) {
+        context.shadowBlur = 10
+        context.shadowColor = toRGBString(Main.theme.secondaryBg, 1)
+        this.polygon.draw(context, toRGBString(Main.theme.enemyBg, this.opacity), 1, 1, offset)
+        context.shadowBlur = 0
+        context.shadowColor = 'transparent'
+        let o = [offset[0] + this.cx, offset[1] + this.cy]
+        this.furnace.draw(context, toRGBString(Main.theme.enemyBg, this.opacity), 0, this.hiddenScale, o)
+        this.wings.forEach((w) => w.draw(context, toRGBString(Main.theme.secondaryFg, this.opacity), 0, this.hiddenScale, o))
+        this.spitter.draw(context, toRGBString(Main.theme.secondaryBg, this.opacity*0.9), 0, this.hiddenScale, o)
+
+        // context.fillStyle = 'red'
+    	// circle(context, [(this.cx + offset[0])*this.polygon.__scale, (this.cy + offset[1])*this.polygon.__scale], 5, 'red', 0)
+	}
+
+    toPolygonAngle(d) {
+        return -d % 360 + 90        
+    }
+
+    toNormalizedAngle(d) {
+        return - (d % 360 - 90)
+    }
+
+    get cx() {
+        return this.x
+    }
+
+    get cy() {
+        return this.y
+    }
+}
+
+Boss1.Phase2 = class extends Boss.Multi {
+    constructor(b, m) {
+        super(b, m)
+        this.states.autoEnter = false
+        // this.addState(new Boss1.Laser(this.boss, this.states))
+        this.addState(new Boss1.Ia(1, this.boss, this.states))
+        this.addState(new Boss1.HellYou(2, this.boss, this.states))
+        this.addState(new Boss1.Spearo(3, this.boss, this.states))
+        this.addState(new Boss1.Laser(0, this.boss, this.states))
+        this.states.autoEnter = true
+    }
+    enter() {
+        super.enter()
+    }
+}
+
+Boss1.Ia = class extends Boss.NextIndex { // intial attack, I.A.
+    constructor(i, boss, m) {
+        super(i, boss, m)
+		this.pIndex = 0
+		// list of indexs to ease to
+		this.pos = [
+			[0, -150],
+            [-300, 150],
+            [600, 0],
+            [-300, 0]
+		]
+    }
+
+	enter() {
+		this.pIndex = 0
+		this.nextPos()
+	}
+
+    exit() {
+        this.pIndex = 0
+        this.trueExit()
+    }
+
+	nextPos() {
+        if (this.pIndex >= this.pos.length) {
+            this.exit()
+            return;
+        }        
+        this.boss.easeTo((this.boss.x + this.pos[this.pIndex][0]), this.boss.y + this.pos[this.pIndex][1])
+        this.boss.knockback(20, 5, 50)
+        setTimeout(() => {
+            for (let i = -2; i < 2; ++i) {
+                let b = new BossBullet(this.boss.x + i * 30, this.boss.y, this.boss.target, 2500, 700, null, 0.2, () => { this.boss.camera.defaultShake() }, 500, (this.pIndex == 0) ? Math.abs(i)*40 + 600 : 0, 0.8)
+                b.initTrails(this.boss.particles, 50, 1)
+                b.derivePath(Init.key.homePaths.wave1, i*randint(80, 90)*40)
+                this.boss.bullet(b)
+                // log(this.boss.particles.particles.length)
+            }
+            this.pIndex ++;
+        }, 100)
+	}
+
+    easeEnd() {
+		super.easeEnd()
+        this.boss.getHolderState().timer.createTimeout(() => {this.nextPos()}, 100)
+        // this.nextPos()
+	}
+
+    frame(dt) {
+        this.boss.direction = this.boss.toPolygonAngle(this.boss.polygon.calculateAngle(this.boss.target.x, this.boss.target.y))
+	}
+}
+
+Boss1.HellYou = class extends PolygonBoss.Rotating {
+    constructor(i, b, m) {
+		super(i, b, m, 20, 15, 360*2)
+    }
+
+	frame(dt, now) {
+		super.frame(dt, now)
+		this.rotateSpeed = Math.min(this.rotateSpeed + dt * 0.25, 30)
+	}
+
+    endRotatation() {
+        super.endRotatation()
+        this.boss.getHolderState().timer.createTimeout(() => {
+            this.loopy(30)
+            this.boss.getHolderState().timer.createTimeout(() => {
+                this.exit()
+            }, 600)
+        }, 400)
+    }
+
+    loopy(o) {
+        for (let i = o - 1; i >= 0; i--) {
+            let b = new PausedHomingBullet(this.boss.x, this.boss.y, this.boss.target, i*360/o, 10, 5000, 
+                Math.cos((this.boss.direction + i*360/o - 90)*Math.PI/180)*100, 
+                Math.sin((this.boss.direction + i*360/o - 90)*Math.PI/180)*100, 
+                0.1, 600 + (i + 1) * randint(90, 120) * 1.1, 800, () => this.boss.camera.defaultShake()
+            )
+            b.initTrails(this.boss.particles, randint(8, 9)*4, 1)
+            b.derivePath(Init.key.homePaths.wave1, randint(800, 900)*5)
+            this.boss.bullet(b)
+        }
+    }
+
+    exit() {
+        this.trueExit()
+    }
+
+	shoot() {
+		super.shoot()
+        let b = new BossBullet(this.boss.x, this.boss.y, this.boss.target, 3000, 500, this.toAngle(this.angle), 0.15, () => this.boss.camera.defaultShake(), 500, 100, 0.8, 1)
+        // new BossBullet(lckr, wait, waitEase)
+        b.initTrails(this.boss.particles, 50, 1)
+        b.derivePath(Init.key.homePaths.wave1, randint(800, 900)*4)
+        this.boss.bullet(b)
+	}
+
+	toAngle(d) {
+		return (-(d + 180) % 360 - 90)%360
+	}
+}
+
+Boss1.Spearo = class extends Boss.NextIndex {
+    constructor(i, b, m) {
+        super(i, b, m)
+        let o = 200*2
+        this.positions = [
+            [0, -o],
+            [-o, 0],
+            [0, o],
+            [o, 0]
+        ]
+        this.index = 0
+        this.shots = 5
+        this.waits = 500
+        this.waitingTime = 2500
+    }
+
+    enter() {
+        this.index = 0
+        this.goSomewhere(this.waits * 2.5)
+    }
+
+    goSomewhere(t) {
+        if (this.index >= this.positions.length) {
+            this.exit()
+            this.index = 0
+            return;
+        }
+        this.boss.vanishTo(this.boss.target.x + this.positions[this.index][0], this.boss.target.y + this.positions[this.index][1], t)
+        this.index ++;
+    }
+
+    exit() {
+        this.trueExit()
+    }
+
+    vanishing() {
+        super.vanishing()
+
+    }
+
+    vanishEnd() {
+        this.boss.x = this.boss.target.x + this.positions[this.index - 1][0]
+        this.boss.y = this.boss.target.y + this.positions[this.index - 1][1]  
+        this.updateDirection()
+        this.boss.knockback(15, 5, 40)
+        this.boss.getHolderState().timer.createTimeout(() => {
+            this.boss.knockback(26, 10, 30)
+            this.shoot(this.shots)
+            this.boss.getHolderState().timer.createTimeout(() => {
+                this.goSomewhere(this.waits)
+            }, this.waitingTime)
+        }, this.waitingTime*0.25)
+    }
+
+    shoot(o, d=50, s=50) {
+        let bd = this.boss.toNormalizedAngle(this.boss.direction)
+        for (let i = -o; i < o; ++i) {
+            let b = new PausedHomingBullet(this.boss.x, this.boss.y, this.boss.target, this.boss.toPolygonAngle(this.boss.direction) + i * (s/(o*2)), 20, 3000, 
+                Math.cos((this.boss.direction + i * 20 - 90)*Math.PI/180)*d, 
+                Math.sin((this.boss.direction + i * 20 - 90)*Math.PI/180)*d, 
+                0.2, (o + 0.5 - Math.abs(i))*80 + 10, 800, () => this.boss.camera.defaultShake()
+            )
+            b.initTrails(this.boss.particles, randint(8, 9)*4, 1)
+            
+            b.derivePath(Init.key.homePaths.wave1, randint(800, 900)*4)
+            this.boss.bullet(
+                // new BossDefaultBullet(this.boss.x, this.boss.y, 20, 5, this.boss.direction, 50, 5000)
+                b
+            )
+        }
+        for (let i = -Math.floor(o*0.75); i < Math.floor(o*0.75); ++i) {
+            let b = new BossBullet(
+                this.boss.x + Math.cos((this.boss.direction + i * 20 - 90)*Math.PI/180)*d,
+                this.boss.y + Math.sin((this.boss.direction + i * 20 - 90)*Math.PI/180)*d,
+                this.boss.target, 3100, 1100, bd + i * 15, 0.3, () => { this.boss.camera.defaultShake() }, 900
+            )
+			b.initTrails(this.boss.particles, 50, 1)
+			b.derivePath(Init.key.homePaths.wave1, randint(800, 900)*4)
+            this.boss.bullet(b)
+        }
+    }
+
+    frame(dt, now) {
+        super.frame(dt, now)
+        this.updateDirection()
+    }
+
+    updateDirection() {
+        this.boss.direction = this.boss.toPolygonAngle(angleFromTo(this.boss.target.x, this.boss.target.y, this.boss.x, this.boss.y))
+    }
+}
+
+Boss1.Laser = class extends Boss.NextIndex {
+    constructor(i, b, m) {
+        super(i, b, m)
+    }
+
+    enter() {
+        super.enter()
+        this.boss.vanishTo(this.boss.limitingRect.centerX, this.boss.limitingRect.centerY, 500)
+    }
+
+    vanishEnd() {
+		this.trueExit()
+		// this.boss.bullet(new ChargedLaser(this.boss.x, this.boss.y, 0, this.boss.target))
+    }
+}
+
+class Camera {
+    #rot = 0
+    constructor() {
+        this.x = 0
+        this.y = 0
+        this.ease = 0.05
+        this.tx = 0
+        this.ty = 0
+        this.sx = 0
+        this.sy = 0
+        this.sd = .1
+        this.lminx = Number.MIN_SAFE_INTEGER
+        this.lmaxx = Number.MAX_SAFE_INTEGER
+        this.lminy = Number.MIN_SAFE_INTEGER
+        this.lmaxy = Number.MAX_SAFE_INTEGER
+        this.ox = 0
+        this.oy = 0
+        
+        this.rot = 0
+        this.rotEaseBack = 0.08
+        this.rotEaseTo = 0.2
+        this.rotClamp = 2
+        this.targetRotation = this.getRotation()
+
+        this.__scale = 1
+    }
+
+    update(dt) {
+        this.x = Math.min(Math.max(this.x + (this.tx - this.x) * this.ease * dt, this.lminx + (this.ox / this.__scale)), this.lmaxx - (this.ox / this.__scale))
+        this.y = Math.min(Math.max(this.y + (this.ty - this.y) * this.ease * dt, this.lminy + (this.oy / this.__scale)), this.lmaxy - (this.oy / this.__scale))
+        if (Math.abs(this.getRotation() - this.getTargetRotation()) <= this.rotClamp) {
+            this.setRotation(this.getTargetRotation())
+        } else {
+            this.setRotation(lerp(this.getRotation(), this.targetRotation, this.rotEaseTo * dt))
+        }
+        this.setTargetRotation(lerp(this.getTargetRotation(), 0, this.rotEaseBack * dt))
+        if (this.sx > 0) {
+            this.sx -= Math.min(this.sx, this.sd)
+        }
+        if (this.sx < 0) {
+            this.sx += Math.min(-this.sx, this.sd)
+        }
+        if (this.sy > 0) {
+            this.sy -= Math.min(this.sy, this.sd)
+        }
+        if (this.sy < 0) {
+            this.sy += Math.min(-this.sy, this.sd)
+        }        
+    }
+
+    get() {
+        return [(this.ox / this.__scale) - this.x + this.sx, (this.oy / this.__scale) - this.y + this.sy]
+    }
+
+    set targetX(x) {
+        this.tx = x
+    }
+
+    set targetY(y) {
+        this.ty = y
+    }
+
+    shake(x, y, r) {
+        this.sx += x
+        this.sy += y
+        this.setTargetRotation(r)
+        // https://stackoverflow.com/questions/41191872/setting-an-x-and-y-of-a-html-canvas-2d-context-screen-shake
+    }
+
+    getRotation() {
+        return this.#rot
+    }
+
+    setRotation(deg) {
+        this.#rot = deg
+        this.rot = this.#rot * Math.PI / 180
+    }
+
+    setTargetRotation(deg) {
+        this.targetRotation = deg
+    }
+
+    getTargetRotation() {
+        return this.targetRotation
+    }
+
+    defaultShake(i=1.25) {
+        this.shake(randintDouble(9, 11)*i, randintDouble(9, 11)*i, randintDouble(2, 6)*i*0.2)        
+    }
+}
+
+class UI {
+    /**
+     * @param {String} type
+     * @param {String} style
+     * @param {String} className
+     * @param {String} text
+     * @returns {HTMLElement}
+     */    
+    static element(type, style, attrs={}, otherAttrs={}) {
+        let element = document.createElement(type)
+       	let e = UI.setElementStyle(element, style)
+		UI.setAttributes(e, attrs)
+        UI.setOtherAttrs(e, otherAttrs)
+		return e
+    }
+
+	static setAttributes(el, attrs) {
+		Object.keys(attrs).forEach((k) => el.setAttribute(k, attrs[k]))
+	}
+
+    static setOtherAttrs(el, attrs) {
+        Object.keys(attrs).forEach((k) => el[k] = attrs[k])
+    }
+
+    /**
+     * A function that sets the style of an HTMLElement
+     * @param {HTMLElement} element 
+     * @param {String} style 
+     * @returns 
+     */
+    static setElementStyle(element, style) {
+        if (!style) { return element }
+        let elType = {style: "", value: ""}
+        let isKnown = {style: false, value: false}
+        for (let i = 0; i < style.length; ++i) {
+            let current_char = style[i]
+            if (current_char === ":") {
+                isKnown.style = true;
+                isKnown.value = false;
+                elType.value = ""
+            } else if (current_char === ";" || i == style.length - 1) {
+                elType.value += current_char === ";" ? "" : current_char
+                isKnown.value = true;
+                isKnown.style = false;
+                element.style.setProperty(elType.style, elType.value)
+                elType.style = ""
+            } else {
+                if (!isKnown.style) {
+                    elType.style += (current_char === " " && elType.style.length == 0) ? "" : current_char;
+                }
+                if (!isKnown.value) {
+                    elType.value += (current_char === " " && elType.value.length == 0) ? "" : current_char;
+                }
+            }
+        }
+        elType = null
+        isKnown = null
+        return element
+    }
+
+    static icon(name, style='', className='', onclick=null) {
+        return UI.element('span', '', {class: 'material-symbols-rounded ' + className, style: style}, {textContent: name, onclick: onclick})
+    }
+
+    static html(html) {
+        let a = UI.element('div')
+        a.innerHTML = html
+        return a.firstChild
+    }
+}
+
+window.onload = () => main()
+	</script>
+</body>
+</html>
