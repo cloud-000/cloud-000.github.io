@@ -1,1 +1,489 @@
 
+<!--https://sile.github.io/pixcil/ up right down left urdl Ugly Rats Don’t Like-->
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Test</title>
+	<style>
+body {
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+	background: black;
+}
+
+canvas {
+	position: absolute;
+	background: black;
+	left: 50%;
+	top: 50%;
+	transform: translate(-50%, -50%);
+	outline: none;
+	border: none;
+}
+	</style>
+</head>
+<body>
+<canvas></canvas>
+<script>
+function main() {
+	devicePixelRatio = Math.floor(devicePixelRatio)
+	const MAIN = new Main()
+	MAIN.initCanvas(16, 9)
+	MAIN.cancelSmoothing()
+	MAIN.resize()
+	MAIN.start({fps: 60})
+}
+
+function roundToNearestMultiple(value, multiple) { return Math.round(value / multiple) * multiple; }
+function rangeCheck(value, max, min) {return min <= value && value <= max}
+function _clampy(v, max, min, e) {return rangeCheck(v, max, min) ? e : v} // strange clamp hehe
+function normalClamp(v, max, min) {return rangeCheck(v, max, min) ? v : Math.max(min, Math.min(max, v))}
+function drawText(ctx, x, y, text, font, color, lineWidth=0) {ctx.font = font; ctx.fillStyle = color; ctx.strokeStyle = color; if (lineWidth > 0) {ctx.lineWidth = lineWidth; ctx.strokeText(text, x, y)} else {ctx.fillText(text, x, y)}}
+function drawCircle(ctx, x, y, radius, lineWidth=0, startAngle=0, endAngle=Math.PI*2) {ctx.beginPath(); ctx.arc(x, y, radius, startAngle, endAngle); if (lineWidth==0) {ctx.fill() } else {ctx.lineWidth = lineWidth; ctx.stroke() }}
+function drawLine(ctx, x, y, ex, ey) {ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey); ctx.stroke()}
+function drawRect(context, x, y, w, h, lineWidth=0) {if (lineWidth == 0) {context.fillRect(x, y, w, h)} else {context.lineWidth = lineWidth; context.strokeRect(x, y, w, h)}}
+function drawPolygon(context, x, y, points, lineWidth=0, scale=1) {
+    context.beginPath()
+    context.moveTo(x, y)
+    for (let i = 0; i < points.length; ++i) {
+        context.lineTo(x + points[i][0]*scale, y + points[i][1]*scale)
+    }
+    context.lineTo(x + points[0][0]*scale, y + points[0][1]*scale)
+    context.closePath()
+    if (lineWidth == 0) {
+        context.fill()
+    } else {
+        context.lineWidth = lineWidth
+        context.stroke()
+    }
+}
+
+class Game { // https://lospec.com/palette-list/pelennor8
+	static COLORS = {
+		BACKGROUND: ["rgb(134, 201, 235)", "#c0bfc0"],
+		PRIMARY: ["#4e495f", "#816271", "#997577", "#c3a38a"],
+		SECONDARY: ["#20394f", "#0f2a3f", "#08141e"],
+		DEBUG: {
+			TEXT: "#af3c3c",
+			STROKE: "rgba(79, 126, 201, 0.4)",
+			FONT: "{0}px arial"
+		}
+	}
+	#hiddenDelta = 1
+	constructor(main) {
+		this.main = main
+		this.manager = new GStateManager()
+		this.manager.main = this
+	}
+
+	async init() {
+		await this.manager.addState("test", new (class extends GState {
+			constructor() {
+				super()
+				this.scene = new Scene2d()
+                this.scene.addChildById(new Drone(), "drone")
+                this.scene.getChildById("drone").thrusters.left.setPower(0)
+                this.scene.getChildById("drone").thrusters.right.setPower(0)
+                // this.scene.getChildById("drone").thrusters.right.setAngle(1)
+                
+                this.scene.camera.setTarget(this.scene.getChildById("drone"))
+                this.scene.camera.debug = true
+
+                this.particleManager = new ParticleManager()
+                this.scene.addChild(this.particleManager)
+
+                this.controls =  new Controls()
+                this.controls.registerKey("l-u", "q")
+                this.controls.registerKey("l-d", "a")
+                this.controls.registerKey("r-u", "e")
+                this.controls.registerKey("r-d", "d")
+
+                this.controls.registerKey("la-u", "w")
+                this.controls.registerKey("la-d", "s")
+                this.controls.registerKey("ra-u", "r")
+                this.controls.registerKey("ra-d", "f")
+                this.controls.listen(window)
+			}
+
+            enter() {
+                super.enter()
+                this.scene.camera.setDimensions(this.stateValues.parent.main.main.canvas.width, this.stateValues.parent.main.main.canvas.height)
+            }
+
+            frame(dt) {
+                let left = this.controls.getControl("l-u", true) - this.controls.getControl("l-d", true) 
+                let right = this.controls.getControl("r-u", true) - this.controls.getControl("r-d", true)
+                if (left) {
+                    this.scene.getChildById("drone").thrusters.left.setPower(left*0.01 + this.scene.getChildById("drone").thrusters.left.power_ratio)
+                }
+                if (right) {
+                    this.scene.getChildById("drone").thrusters.right.setPower(right*0.01 + this.scene.getChildById("drone").thrusters.right.power_ratio)
+                }
+                left = this.controls.getControl("la-u", true) - this.controls.getControl("la-d", true) 
+                right = this.controls.getControl("ra-u", true) - this.controls.getControl("ra-d", true)
+                if (left) {
+                    let d = this.scene.getChildById("drone").thrusters.left
+                    d.setAngle(d.angle_ratio + left*0.1)
+                }
+                if (right) {
+                    let d = this.scene.getChildById("drone").thrusters.right
+                    d.setAngle(d.angle_ratio + right*0.1)
+                }
+                this.scene.update(dt)
+                if (this.scene.getChildById("drone").y > 100) {
+                    this.scene.getChildById("drone").y = 100
+                    this.scene.getChildById("drone").vy = 0
+                }
+            }
+
+            draw() {
+                let d = this.scene.getChildById("drone")
+                this.scene.camera.debugText(this.stateValues.parent.main.main.context, 10, 30, "Left: {0}".format(d.thrusters.left.power_ratio.toFixed(2)))
+                this.scene.camera.debugText(this.stateValues.parent.main.main.context, 10, 60, "Right: {0}".format(d.thrusters.right.power_ratio.toFixed(2)))
+                this.scene.camera.debugText(this.stateValues.parent.main.main.context, 10, 100, "Left Angle: {0}".format(d.thrusters.left.angle_ratio.toFixed(2)))
+                this.scene.camera.debugText(this.stateValues.parent.main.main.context, 10, 130, "Right Angle: {0}".format(d.thrusters.right.angle_ratio.toFixed(2)))
+
+                drawLine(this.stateValues.parent.main.main.context, 0, this.scene.camera.toScreenY(100), 500, this.scene.camera.toScreenY(100))
+
+               this.spawnParticles(d)
+                
+                this.scene.draw(this.stateValues.parent.main.main.context)
+            }
+
+            spawnParticles(d) {
+                this.spawnBooster(d, "right", 1)
+                this.spawnBooster(d, "left", -1)
+
+            }
+
+            spawnBooster(d, r, s) {
+                let a = d.thrusters[r].angle*d.thrusters[r].max_angle - Math.PI / 2
+                for (let i = 0; i < Math.floor(d.thrust_force[r]*10); ++i) {
+                    this.particleManager.particle(new Particle2d(d.x + s*d.thrust_force.dx, d.y + s*d.thrust_force.dy, a + Math.random()*Math.PI*0.5, -Math.random()*10, Math.random()*10 + 10))
+                }                
+            }
+		})())
+		this.manager.state = "test"
+	}
+
+	start() {}
+
+	frame(dt) {
+		let delta = roundToNearestMultiple(dt, 0.05)*this.#hiddenDelta
+		this.manager.frame(delta)
+	}
+
+	draw() {
+		this.main.context.fillStyle = Game.COLORS.BACKGROUND[0]
+		this.main.context.fillRect(0, 0, this.main.canvas.width, this.main.canvas.height)
+		this.main.context.fillStyle = Game.COLORS.PRIMARY[2]
+		this.manager.draw()
+	}
+
+	pause() {
+		// this.manager.state = null
+		this.#hiddenDelta = 0
+	}
+
+	unpause() {
+		setTimeout(() => {
+			if (document.visibilityState == "visible") {
+				this.#hiddenDelta = 1
+			}
+		}, 100);
+		// this.manager.state = "test1"
+	}
+}
+
+String.prototype.format=String.prototype.f=function(){let t=this,e=arguments.length;for(;e--;)t=t.replace(RegExp("\\{"+e+"\\}","gm"),arguments[e]);return t};
+function createScript(script) {return UI.element("script", {type: "text/javascript"}, {text: script})}
+function createStyle(style) {return UI.element("style", {}, {rel: "stylesheet", textContent: style})}
+class Main{static{onbeforeunload=Main.beforeClose.bind(Main)}static log(t){if(!this.console)return;let e=UI.element("div",{style:"width: 100%; display: flex; flex-direction: row; align-items: center; justify-content: space-between;",class:"message"});e.appendChild(UI.element("span",{},{textContent:t}));let s=new Error;Error.captureStackTrace(s);let i=s.stack.split("\n");e.appendChild(UI.element("span",{style:"font-size: 1rem; opacity: .5"},{textContent:"line:{0}".format(i[2].match(/(:[\d]+)/)[0].replace(":",""))}));let h=this.console.document.querySelector(".messages");h.scrollTo(0,h.scrollHeight+10),h.appendChild(e)}static beforeClose(t){Main.console&&Main.console.close()}static createDebugConsole(t=!0){if(this.console)throw new Error("Already has debug console");this.console=open("about:blank","_blank",t?"popup,width={0},height={1},left={2},top={3}".format(.25*window.innerWidth,.75*window.innerHeight,window.screenLeft+.75*window.innerWidth,window.screenTop+.25*window.innerHeight):null);this.console.document.open(),this.console.document.write("<!DOCTYPE html><html><head><title>Debug panel</title></head><body><div class='messages'></div></body></html>".replace(/(\r\n|\n|\r)/gm,"")),this.console.document.close(),this.console.document.body.appendChild(createScript('function main() {console.log("Debuggin the debugger be like")}; main()')),this.console.document.head.appendChild(createStyle('\n@import url("https://fonts.googleapis.com/css?family=Roboto")\nbody, html { margin: 0; padding: 0; }\nbody { width: 100vw; height: 100vh; box-sizing: border-box; padding: 0; margin: 0;\n    background-color: white;\n\toverflow: hidden;\n}\n.messages {width: 100%;height: 100%;box-sizing: border-box;padding: .5rem;overflow-y: auto;}\n.message {font-family: Roboto, sans-serif, arial;font-size: 1.5rem;color: black}'))}constructor(){this.canvas=document.querySelector("canvas"),this.context=this.canvas.getContext("2d"),this.ratio={width:1,height:1},this.canvas_size=70*devicePixelRatio,this.canvasScale=1,this.targetFps=30,this.maxFrameTime=250,this.deltaTime=-1,this.game=new Game(this)}cancelSmoothing(t=!1){this.context.mozImageSmoothingEnabled=t,this.context.webkitImageSmoothingEnabled=t,this.context.msImageSmoothingEnabled=t,this.context.imageSmoothingEnabled=t}frame(t){this.game.frame(t*this.deltaTime)}draw(){this.context.clearRect(0,0,this.canvas.width,this.canvas.height),this.game.draw()}start({fps:t}){window.addEventListener("resize",this.resize.bind(this)),document.addEventListener("visibilitychange",this.toggleTab.bind(this)),this.targetFps=t,this.deltaTime=this.targetFps/1e3,this.game.start();let e=0,s=0,i=0;const h=t=>{for(s=t-e,s>this.maxFrameTime&&(s=this.maxFrameTime),e=t,i+=s;i>=16;)this.frame(16),i-=16;this.draw(),requestAnimationFrame(h)};h(0)}initCanvas(t,e){this.ratio.width=t,this.ratio.height=e,this._changeCanvasSize(),this.game.init()}_changeCanvasSize(){this.canvas.width=this.ratio.width*this.canvas_size,this.canvas.height=this.ratio.height*this.canvas_size}toggleTab(){"visible"==document.visibilityState?this.game.unpause():this.game.pause()}resize(){let t=this.ratio;window.innerWidth>window.innerHeight?(this.canvas.style.height=window.innerHeight+"px",this.canvas.style.width=this.canvas.offsetHeight*t.width/t.height+"px",this.canvas.offsetWidth>window.innerWidth&&(this.canvas.style.height=.01*window.innerWidth/t.width*t.height*100+"px",this.canvas.style.width=this.canvas.offsetHeight*t.width/t.height+"px")):(this.canvas.style.width=window.innerWidth+"px",this.canvas.style.height=this.canvas.offsetWidth*t.height/t.width+"px"),this.canvasScale=this.canvas.offsetWidth/this.canvas.width}}class Object2d{static NAME="Object2d";#t=!1;#e=null;#s=!1;#i={x:0,y:0,targetX:null,targetY:null,radius:350,innerRadius:150,zoom:1.25,zoomPower:1,enabled:!0,hasAttraction:!1,power:1,parent:null};static t={NORMAL:0,SCENE:1,CAMERA:2,PARENT:3};constructor(){this.x=0,this.y=0,this.vx=0,this.vy=0,this._parent=null,this.type=Object2d.t.NORMAL,this.IS_OBJECT_2D=!0,this.animation=null}__hasAnimation(){return this.#s}attachAnimation(t){this.animation=t,this.#s=!0}drawAnimation(t,e,s=0,i=0,h=!0,a=1,r=!1){this.#s&&this.animation.draw(t,e.toScreenX(this.x+s),e.toScreenY(this.y+i),e.scale,0,h,a,r)}updateAnimation(t){this.#s&&this.animation.update(t)}__becomeCameraTarget(t){this.#e=t}__parentCamera(){return this.#e}__stopBeingCameraTarget(){this.#e=null}__becomeCameraInterest(t){this.#i.parent=t,this.#i.hasAttraction=!0}__stopBeingCameraInterest(t){this.#i.parent=null,this.#i.hasAttraction=!1}getCameraAttractionObject(){return this.#i}destroy(){this.#t=!0,this._parent=null,this.animation.destroy(),this.animation=null,this.__parentCamera()&&this.__parentCamera().setTarget(null),this.#i.parent&&this.#i.parent.removePointOfInterest(this)}getDestroyed(){return this.#t}setParent(t){this._parent=t}update(t){this.x+=this.vx*t,this.y+=this.vy*t}draw(t,e){t.fillRect(e.toScreenX(this.x),e.toScreenY(this.y),10*e.scale,10*e.scale)}debugDraw(t,e){let s=e.toScreenX(this.x+this.#i.x),i=e.toScreenY(this.y+this.#i.y);this.#i.hasAttraction&&(t.strokeStyle=Game.COLORS.DEBUG.STROKE,drawCircle(t,s,i,this.#i.radius*e.scale,2*e.scale),drawCircle(t,s,i,this.#i.innerRadius*e.scale,2*e.scale),null!=this.#i.targetX&&(drawLine(t,s,i,e.toScreenX(this.#i.targetX),e.toScreenY(this.#i.targetY)),this.#i.targetX=null,this.#i.targetY=null)),e.debugText(t,s,i,"x: {0}, y: {1}".format(Math.round(this.x),Math.round(this.y)))}}class BasicCamera2d extends Object2d{#h=1;#a=1/(16*devicePixelRatio);#r=0;#l={x:0,y:0};#n=!1;constructor(){super(),this.type=Object2d.t.CAMERA,this.scale=1,this.window={width:0,height:0},this.__offset={x:0,y:0,easeX:.05,easeY:.1}}debugText(t,e,s,i,h=18){drawText(t,e,s,i,Game.COLORS.DEBUG.FONT.format(this.scale*h),Game.COLORS.DEBUG.TEXT,0)}update(t){super.update(t),this.#l.x+=(this.__offset.x-this.#l.x)*this.__offset.easeX*t,this.#l.y+=(this.__offset.y-this.#l.y)*this.__offset.easeY*t,this.#l.x=_clampy(Math.round(100*this.#l.x)/100,.2,-.2,0),this.#l.y=_clampy(Math.round(100*this.#l.y)/100,.2,-.2,0)}set scale(t){this.#h=t}getTrueScale(){return this.#h}changeScale(t){this.scale=t+this.getTrueScale()}get scale(){return roundToNearestMultiple(this.__getDisplayScale(),this.#a)*devicePixelRatio}get scaleOffset(){return this.#r}set scaleOffset(t){this.#r=t}setDimensions(t,e){this.window.width=.5*t,this.window.height=.5*e}toScreenX(t){return Math.round(Math.floor(t+this.getOffsetX())*this.scale)+this.window.width}toScreenY(t){return Math.round(Math.floor(t+this.getOffsetY())*this.scale)+this.window.height}getOffsetX(){return-Math.floor(this.__getDisplayOffsetX()+this.#l.x)}getOffsetY(){return-Math.floor(this.__getDisplayOffsetY()+this.#l.y)}__getDisplayOffsetX(){return this.x}__getDisplayOffsetY(){return this.y}__getDisplayScale(){return this.#h+this.#r}__setHiddenDPR(t){this.#a=1/(16*t)}set offsetX(t){this.__offset.x=t}set offsetY(t){this.__offset.y=t}get offsetX(){return this.__offset.x}get offsetY(){return this.__offset.y}set debug(t){this.#n=t}get debug(){return this.#n}}class Camera2d extends BasicCamera2d{#o=null;#c=!1;#d=0;#g=0;#m=1;#u=.1;#y=.05;#p=!1;#f=!1;#w=2;constructor(){super(),this.ease={x:.125,y:.1},this.track={x:0,y:0},this.pointsOfInterest=[]}addPointOfInterest(t){this.pointsOfInterest.push(t),t.__becomeCameraInterest(this)}removePointOfInterest(t){this.pointsOfInterest.splice(this.pointsOfInterest.indexOf(t),1),t.__stopBeingCameraInterest(this)}update(t){super.update(t),this.#c&&(this.trackTarget(this.#o),this.x+=this.track.x*t,this.y+=this.track.y*t);let e=0,s=0,i=0,h=0;this.pointsOfInterest.forEach((t=>{let a=t.getCameraAttractionObject();if(a.enabled){let r=t.x+a.x,l=t.y+a.y;if(rangeCheck(this.x,r+a.radius,r-a.radius)&&rangeCheck(this.y,l+a.radius,l-a.radius)){let n=(r-this.x)**2+(l-this.y)**2;if(n=Math.sqrt(n),n<a.radius){if(n<a.innerRadius)i+=a.zoom-this.getTrueScale(),e+=(r-this.x)*a.power,s+=(l-this.y)*a.power;else{let t=1-(n-a.innerRadius)/(a.radius-a.innerRadius);i+=(a.zoom-this.getTrueScale())*a.zoomPower*t,t*=a.power,e+=(r-this.x)*t,s+=(l-this.y)*t}t.getCameraAttractionObject().targetX=this.__getDisplayOffsetX(),t.getCameraAttractionObject().targetY=this.__getDisplayOffsetY(),h++}}}a=null})),h>0?(this.lerpSmoothedX(t,this.x+e/h),this.lerpSmoothedY(t,this.y+s/h),this.lerpSmoothScale(t,this.getTrueScale()+i/h),this.#f=!1,this.#p=!1):(this.lerpSmoothScale(t,this.getTrueScale()),this.#p?this.#d=this.x:(this.lerpSmoothedX(t,this.x),Math.abs(this.x-this.#d)<this.#w&&(this.#p=!0)),this.#f?this.#g=this.y:(this.lerpSmoothedY(t,this.y),Math.abs(this.y-this.#g)<this.#w&&(this.#f=!0)))}lerpSmoothScale(t,e){this.#m+=(e-this.#m)*this.#y*t}lerpSmoothedX(t,e){this.#d+=(e-this.#d)*this.#u*t}lerpSmoothedY(t,e){this.#g+=(e-this.#g)*this.#u*t}__getDisplayOffsetX(){return this.#d}__getDisplayOffsetY(){return this.#g}__getDisplayScale(){return this.#m+this.scaleOffset}trackTarget(t){let e=t.x-this.x,s=t.y-this.y;this.track.x=e*this.ease.x,this.track.y=s*this.ease.y}setTarget(t){if(this.#o&&this.#o.__stopBeingCameraTarget(),null==t)return this.#o=null,void(this.#c=!1);this.#o=t,this.#o.__becomeCameraTarget(this),this.#c=!0}destroy(){super.destroy(),this.setTarget(null)}}class Object2dParent extends Object2d{constructor(){super(),this.children=[],this.children_keys={},this.type=Object2d.t.PARENT}destroy(){super.destroy(),this.clear(!0),this.children_keys=null}clear(t=!1){this._forAllChildren((e=>{this.children[e].destroy(),t?delete this.children[e]:this.children.splice(e,1)})),Object.keys(this.children_keys=t=>{delete this.children_keys[t]})}_forAllChildren(t){for(let e=this.children.length-1;e>=0;e--)t.call(null,e)}addChild(t){this.children.push(t),t.IS_OBJECT_2D&&t.setParent(this)}removeChild(t){this.children.splice(this.children.indexOf(t),1)}addChildById(t,e){return this.addChild(t),this.children_keys[e]=t,e}getChildById(t){return this.children_keys[t]}removeChildById(t){this.removeChild(this.getChildById(t)),delete this.children_keys[t]}update(t){super.update(t),this._forAllChildren((e=>this.children[e].update(t)))}draw(t,e){this._forAllChildren((s=>this.children[s].draw(t,e)))}debugDraw(t,e){this._forAllChildren((s=>this.children[s].debugDraw(t,e)))}}class Scene2d extends Object2dParent{constructor(){super(),this.camera=new Camera2d,this.type=Object2d.t.SCENE}destroy(){super.destroy(),this.camera.destroy(),this.camera=null}update(t){super.update(t),this.camera.update(t)}draw(t,e=this.camera){super.draw(t,e),e.debug&&(this.debugDraw(t,e),this.debugCameraPosition(t,e))}debugCameraPosition(t,e){t.strokeStyle=Game.COLORS.DEBUG.STROKE,t.lineWidth=this.camera.scale;let s=this.camera.__getDisplayOffsetX(),i=this.camera.__getDisplayOffsetY(),h=e.toScreenX(s),a=e.toScreenY(i),r=20*this.camera.scale;t.strokeRect(h-.5*r,a-.5*r,r,r)}}class StateManager{#x=null;#_=null;constructor(){this.states={}}destroy(){this.state=null,Object.keys(this.states).forEach((t=>{this.states[t].destroy(),delete this.states[t]})),this.states=null,this.#x=null,this.#_=null}async addState(t,e){this.states[t]=e,await e.setParent(this)}removeState(t){delete this.states[t]}set state(t){t!==this.#_&&(null!=this.#x&&this.#x.exit(),null!=t&&(this.#x=this.states[t],this.#x.enter()),this.#_=t)}get state(){return this.#x}get stateKey(){return this.#_}triggerEvent(t){null!=this.#_&&this.#x.onEventTrigger(t)}}class State{constructor(){this.stateValues={parent:null,active:!1}}setParent(t){this.stateValues.parent=t}onEventTrigger(t){}destroy(){Object.keys(this.stateValues).forEach((t=>delete this.stateValues[t])),this.stateValues=null}enter(){this.stateValues.active=!0}exit(){this.stateValues.active=!1}}class GState extends State{frame(t){}draw(){}}class GStateManager extends StateManager{frame(t){this.stateKey&&this.state.frame(t)}draw(t){this.stateKey&&this.state.draw(t)}}class Rect extends Object2d{constructor(t,e,s,i){super(),this.x=t,this.y=e,this.width=s,this.height=i,this.getCameraAttractionObject().x=.5*this.width,this.getCameraAttractionObject().y=.5*this.height}get left(){return this.x}set left(t){this.x=t}get right(){return this.x+this.width}set right(t){this.x=t-this.width}get top(){return this.y}set top(t){this.y=t}get bottom(){return this.y+this.height}set bottom(t){this.y=t-this.height}copy(){return new Rect(this.x,this.y,this.width,this.height)}copyOnto(t){t.x=this.x,t.y=this.y,t.width=this.width,t.height=this.height}colliderect(t){return!(this.y+this.height<=t.y||this.y>=t.y+t.height||this.x+this.width<=t.x||this.x>=t.x+t.width)}draw(t,e,s=1){drawRect(t,e.toScreenX(this.x),e.toScreenY(this.y),this.width*e.scale,this.height*e.scale,s*e.scale)}}class PhysicsRect extends Rect{#S=new Rect(0,0,0,0);constructor(t,e,s,i){super(t,e,s,i),this.tilemaps=[],this.collisionDirections=[],this.collisions={top:!1,bottom:!1,left:!1,right:!1},this.gravityFactor=.6,this.terminalVelocity=20,this.downFactor=1.5,this.deltaVelocity={x:0,y:0,__lastX:0,__lastY:0,gravity:0,gt:!1}}destroy(){super.destroy(),this.tilemaps=null}addTilemap(t){this.tilemaps.push(t),this.#v(t.tile*t.scale)}applyMovement(t){this.deltaVelocity.gravity=0,this.deltaVelocity.gt=!1,this.collisions.bottom||(this.deltaVelocity.gravity=this.gravityFactor*(this.vy>0?this.downFactor:1),this.vy+=this.deltaVelocity.gravity*t,this.vy>this.terminalVelocity&&(this.deltaVelocity.gravity=this.terminalVelocity-(this.vy-this.deltaVelocity.gravity*t),this.deltaVelocity.gt=!0,this.vy=this.terminalVelocity))}update(t){this.applyMovement(t),this.checkCollisions(t),this.deltaVelocity.x=this.vx-this.deltaVelocity.__lastX,this.deltaVelocity.y=this.vy-this.deltaVelocity.__lastY,this.deltaVelocity.__lastX=this.vx,this.deltaVelocity.__lastY=this.vy}isGrounded(){return this.collisions.bottom}checkCollisions(t){this.x+=this.vx*t,this.collisions.left=!1,this.collisions.right=!1;for(let t=this.tilemaps.length-1;t>=0;t--){let e=this.checkCollisionsX(this.tilemaps[t]);Object.keys(e).forEach((t=>{e[t]&&(this.collisions[t]=!0)}))}this.y+=this.vy*t,this.collisions.top=!1,this.collisions.bottom=!1;for(let t=this.tilemaps.length-1;t>=0;t--){let e=this.checkCollisionsY(this.tilemaps[t]);Object.keys(e).forEach((t=>{e[t]&&(this.collisions[t]=!0)}))}}checkCollisionsX(t){let e={left:!1,right:!1};for(const s of this.collision(t))this.vx>0?(this.vx=0,this.right=s.left,e.right=0):this.vx<0&&(this.vx=0,this.left=s.right,e.left=!0);return e}checkCollisionsY(t){let e={top:!1,bottom:!1};for(const s of this.collision(t))this.vy>0?(this.bottom=s.top,this.vy=0,e.bottom=!0):this.vy<0&&(this.top=s.bottom,this.vy=0,e.top=!0);return e}collision(t){let e=t.tile*t.scale,s=Math.floor(this.x/e),i=Math.floor(this.y/e),h=[];this.#S.width=e,this.#S.height=e;for(const a of this.collisionDirections){let r=t.getTile(s+a[0],i+a[1]);r&&t.getSolid(r.type)&&(this.#S.x=r.x*e,this.#S.y=r.y*e,this.colliderect(r.hasRect?r.rect:this.#S)&&h.push(r.hasRect?r.rect.copy():this.#S))}return s=null,i=null,e=null,h}#v(t){let e=Math.ceil(this.width/t),s=Math.ceil(this.height/t);this.collisionDirections=TileGen.fullFill(0,(2*e+1)*(2*s+1));let i=0;for(let t=0;t<2*e+1;++t)for(let h=0;h<2*s+1;++h)this.collisionDirections[i]=[t-e,h-s],i++;i=null,e=null,s=null}}class Controls{#b=[];constructor(){this.keymap={},this.key={},this._keydownEvent=this._keydownEvent.bind(this),this._keyreleaseEvent=this._keyreleaseEvent.bind(this)}destroy(){this.#b=null}registerKey(t,e){this.keymap[t]=e}_keydownEvent(t){this.key[t.key]=!0}_keyreleaseEvent(t){this.key[t.key]=!1}getKey(t){return this.key[t]||!1}getControl(t,e=!1){return e?this.getKey(this.keymap[t])?1:0:this.getKey(this.keymap[t])}listen(t){t.addEventListener("keydown",this._keydownEvent),t.addEventListener("keyup",this._keyreleaseEvent)}unlisten(){this.#b.forEach((t=>this.unlistenSingular(t))),this.#b=[]}unlistenSingular(t){t.removeEventListener("keydown",this._keydownEvent),t.removeEventListener("keyup",this._keyreleaseEvent)}}class Movement2dControls extends Controls{constructor(t="w",e="a",s="s",i="d"){super(),this.registerKey("right",i),this.registerKey("left",e),this.registerKey("up",t),this.registerKey("down",s)}axisX(){return this.getControl("right",!0)-this.getControl("left",!0)}axisY(){return this.getControl("up",!0)-this.getControl("down",!0)}}class TileMap{constructor(){this.data={},this.types={},this.tile=16,this.scale=1,this.screenSize=[0,0,0],this.directions=[[0,-1],[1,0],[0,1],[-1,0]],this.slopeDirections=[[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]]}fill(t,e,s=!1){let i=t.width<0?t.x+t.width:t.x,h=t.height<0?t.y+t.height:t.y,a=Math.abs(t.width),r=Math.abs(t.height);for(let t=0;t<a;++t)for(let a=0;a<r;++a)this.setTile(i+t,h+a,e,s)}getData(){let t=[],e=Object.values(this.data);for(const s of e)t.push({x:s.x,y:s.y,type:s.type,slope:s.slope});return t}load(t){this.data={},t.forEach((t=>this.setTile(t.x,t.y,t.type,t.slope)))}getSolid(t){return this.types[t].solid}addType(t,e,s=!1){e.type=t,this.types[t+(s?"slope":"")]=e}draw(t,e){let s=Object.values(this.data);if(Math.floor(this.screenSize[2]/e.scale**2)+1>=s.length)s.forEach((s=>this.types[s.type+(0==s.slope?"":"slope")].draw(t,e,s,this.tile,this.scale)));else{let s=Math.floor(e.getOffsetX()/(this.tile*this.scale)),i=Math.floor(e.getOffsetY()/(this.tile*this.scale)),h=Math.floor(this.screenSize[0]/(2*e.scale))+1,a=Math.floor(this.screenSize[1]/(2*e.scale))+1;for(let r=-a;r<a;++r)for(let a=-h-1;a<h;++a){let h=this.getTile(a-s,r-i);h&&this.types[h.type+(0==h.slope?"":"slope")].draw(t,e,h,this.tile,this.scale)}}}getTile(t,e){return this.data[this.key(t,e)]}setTile(t,e,s=null,i=!1){delete this.data[this.key(t,e)],null!==s&&(this.data[this.key(t,e)]=this.genTile(s+(i?"slope":""),t,e))}autoMap(){Object.values(this.data).forEach((t=>t.correct(0==t.slope?this.directions:this.slopeDirections,this)))}genTile(t,e,s){return this.types[t].tile(e,s)}key(t,e){return t+", "+e}resize(t){this.screenSize[0]=Math.ceil(t.width/(this.tile*this.scale)),this.screenSize[1]=Math.ceil(t.height/(this.tile*this.scale)),this.screenSize[2]=this.screenSize[0]*this.screenSize[1]}}class TileSorter{constructor(t,e=null,s="255, 255, 255",i=null,h=0){this.key={};let a=t.images(s);if(this.key.x=a[h],i)this.__customSet(a,i);else{let t=e||["0110","0111","0011","1110","1111","1011","1100","1101","1001","0100","0101","0001","0010","1010","1000","0000"];for(let e=0;e<Math.min(t.length,a.length);++e)this.key[t[e]]=a[e];t=null}this.type=null,this.solid=!0,this.sheet=t,this.slope=!1}__customSet(t,e){let s=Object.keys(e);for(let i=0;i<s.length;++i)this.key[s[i]]=t[e[s[i]]];s=null}draw(t,e,s,i,h){let a=this.key[s.neighbors]||this.key.x;t.drawImage(this.sheet.image,a.x,a.y,a.width,a.height,e.toScreenX(Math.floor(i*s.x*h)),e.toScreenY(Math.floor(i*s.y*h)),Math.floor(a.width*h*e.scale),Math.floor(a.height*h*e.scale)),a=null}tile(t,e){return new Tile(t,e,this.type)}}class diagonalTileSorter extends TileSorter{constructor(t,e=null,s="255, 255, 255"){super(t,e=e||["00xxxxx0","x000xxxx","xxxxx000","xxx000xx"],s),this.slope=!0}tile(t,e){return new slopeTile(t,e,this.type)}}class Tile{constructor(t,e,s){this.x=t,this.y=e,this.type=s,this.neighbors="0000",this.slope=0,this.hasRect=!1}correct(t,e){this.neighbors=this.getNeighbors(t,e)}getNeighbors(t,e){let s="";return t.forEach((t=>{let i=e.getTile(this.x+t[0],this.y+t[1]);s+=i&&i.type===this.type?"1":"0"})),s}}class slopeTile extends Tile{constructor(t,e,s){super(t,e,s),this.slope=1}checkEquals(t,e){if("x"===t||"x"===e)return!1;for(let s=0;s<Math.min(t.length,e.length);++s){let i=t[s],h=e[s];if(i!==h&&"x"!==i&&"x"!==h)return!1}return t.length==e.length}correct(t,e){this.neighbors=this.getNeighbors(t,e);let s=Object.keys(e.types[this.type+"slope"].key);for(let t=0;t<s.length;++t)if(this.checkEquals(this.neighbors,s[t])){this.neighbors=s[t];break}this.neighbors.includes("x")||(this.neighbors="x")}}class TileGen{static fullFill(t,e,s=0){let i=[];for(let h=0;h<e;++h){let e=[];for(let i=0;i<t;++i)e.push(s);i.push(e)}return i}static randomize(t){for(let e=0;e<t.length;++e)for(let s=0;s<t[e].length;++s);return t}static lodFromFill(t,e,s="stone",i=0,h=[0,0]){for(let a=0;a<e.length;++a)for(let r=0;r<e[a].length;++r)e[a][r]==i&&t.setTile(r+h[0],a+h[1],s)}static setRect(t,e,s,i,h,a=1){for(let r=0;r<h;++r)for(let h=0;h<i;++h)void 0!==t[r+s][h+e]&&(t[r+s][h+e]=a)}}class Spritesheet{static canvas=document.createElement("canvas");static c=this.canvas.getContext("2d");#O=null;#k=!1;constructor(t){this.image=new Image,this.image.src=t,this.image.crossOrigin="anonymous",this.loaded=!1,this.decoded=!1,this.image.onload=()=>{this.loaded=!0}}get reversed(){return this.#O}get hasReversed(){return this.#k}static getPixelColor(t,e,s,i){return t.width=1,t.height=1,t.context.clearRect(0,0,t.width,t.height),t.context.drawImage(e,s,i,1,1,0,0,1,1),t.context.getImageData(0,0,1,1)}async load(){await this.image.decode(),this.decoded=!0}static __clearCanvas(){Spritesheet.c.clearRect(0,0,Spritesheet.canvas.width,Spritesheet.canvas.height)}static flip(t,e="255, 255, 255"){Spritesheet.__clearCanvas(),Spritesheet.canvas.width=t.width,Spritesheet.canvas.height=t.height,Spritesheet.c.save(),Spritesheet.c.scale(-1,1),Spritesheet.c.translate(1-t.width,0),Spritesheet.c.drawImage(t,0,0),Spritesheet.c.restore(),Spritesheet.c.clearRect(0,0,1,1),Spritesheet.c.fillStyle="rgb("+e+")",Spritesheet.c.fillRect(t.width-1,0,1,1);let s=new Image;return s.src=Spritesheet.canvas.toDataURL(),Spritesheet.c.resetTransform(),s}async reversedImages(t="255, 255, 255"){let e=await Spritesheet.flip(this.image,t),s=this.images(t,!0,e);return this.#O=s.image,this.#k=!0,s.images}images(t="255, 255, 255",e=!1,s=null){let i=[],h=document.createElement("canvas");h.context=h.getContext("2d",{willReadFrequently:!0});let a=t.split(",").map((t=>parseInt(t))),r=0,l=0,n=e?s:this.image;h.width=n.width,h.height=n.height,h.context.drawImage(n,0,0);for(let t=0;t<n.width;++t){let e=h.context.getImageData(t,0,1,1).data,s=!0;if(0==e[3])s=!1;else t:for(let t=0;t<a.length;++t)if(a[t]!=e[t]){s=!1;break t}s?(i.push({x:r,y:0,width:l,height:this.image.height}),r=t+1,l=0):l++}return delete h.context,h=null,a=null,e?{images:i,image:n}:i}}class __BasicSpriteAnimation extends State{#C=[];#T=null;#E=!1;#A=0;#I=null;static canvas=document.createElement("canvas");static c=this.canvas.getContext("2d");constructor(){super(),this.frame=0,this.defaultTime=8}async load(t,e=!1,s="255, 255, 255"){t.decoded||await t.load(),this.setBaseImage(t.image),this.addImages(t.images(s)),e&&(this.setFlippedFrames(await t.reversedImages(s)),this.setFlippedImage(t.reversed))}setBaseImage(t){this.#E=!0,this.#T=t}setFlippedFrames(t){for(let e=0;e<t.length;++e)this.#C[e].setFlippedRect(t[e])}getBaseImage(){return this.#T}getFlippedImage(){return this.#I}setFlippedImage(t){this.#I=t}addImages(t){t.forEach((t=>this.#C.push(new __SpriteAnimationFrame(this,t))))}destroy(){super.destroy(),this.#C.forEach((t=>t.destroy())),this.#C=null,this.#T=null}getFrame(t){return this.#C[t]}setFrame(t){this.frame=Math.max(Math.min(t,this.#C.length),0)}nextFrame(){this.setFrame((this.frame+1)%this.#C.length)}update(t){this.#A+=t;let e=this.getFrame(this.frame).length||this.defaultTime;this.#A>=e&&(this.#A=0,this.nextFrame())}draw(t,e,s,i,h=this.frame,a=!0,r=1,l=!1){this.getFrame(h).draw(t,e,s,i,a,r,l)}enter(t=!0){super.enter(),t&&(this.frame=0)}}class __SpriteAnimationFrame{constructor(t,e){this.animation=t,this.length=null,this.rect=e,this.__flippedRect=null}setFlippedRect(t){this.__flippedRect=t}draw(t,e,s,i,h,a,r=!1){let l,n,o=this.rect.width*i*a,c=this.rect.height*i*a;r?(l=this.animation.getFlippedImage(),n=this.__flippedRect):(l=this.animation.getBaseImage(),n=this.rect),t.drawImage(l,n.x,n.y,n.width,n.height,e+(h?.5*-o:0),s+(h?-c:0),o,c)}destroy(){this.animation=null,this.rect=null}}class SpriteAnimation extends StateManager{update(t){this.stateKey&&this.state.update(t)}draw(t,e,s,i,h,a=!0,r=1,l=!1){this.stateKey&&(h||(h=this.state.frame),this.state.draw(t,e,s,i,h,a,r,l))}async addAnimation(t,e){await this.addState(t,e)}}
+class UI{static element(t,e={},n={}){let r=document.createElement(t);return UI.setAttributes(r,e),UI.setOtherAttrs(r,n),r}static setAttributes(t,e){Object.keys(e).forEach(n=>t.setAttribute(n,e[n]))}static setOtherAttrs(t,e){Object.keys(e).forEach(n=>t[n]=e[n])}static html(t){let e=UI.element("div");return e.innerHTML=t,e.firstChild}static components={};static registerComponent(t,e){if(this.components[t]){console.log("Component {0} is already registered".format(t));return}let n=UI.element("div");n.innerHTML=e.trim(),UI.components[t]=n.children[0],n.innerHTML="",n=null}static getComponent(t){return this.components[t].cloneNode(!0)}}
+
+class ParticleManager extends Object2dParent {
+    constructor() {
+        super()
+    }
+    particle(p) {this.addChild(p)}
+    update(dt) {
+        super.update(dt)
+        this._forAllChildren(i => {
+            if (this.children[i].dead) {
+                this.children.splice(i, 1)
+            }
+        })
+    }
+
+}
+
+class Particle2d extends Object2d {
+    constructor(x, y, direction, force, life) {
+        super()
+        this.x = x
+        this.y = y
+        this.ease = 0.8
+        this.size = 2
+        this.sizeIncrease = 0.5
+        this.life = life
+        this.maxLife = life
+        this.dead = false
+        this.color = "rgba(86, 106, 122, {0})"
+        this.init(direction, force)
+    }
+
+    init(direction, force) {
+        this.vx = Math.cos(direction) * force
+        this.vy = Math.sin(direction) * force
+    }
+
+    apply(dt) {
+        this.vx *= this.ease
+        this.vy *= this.ease
+        this.size += dt * this.sizeIncrease
+        this.life -= dt
+        if (this.life <= 0) {
+            this.dead = true
+        }
+    }
+
+    update(dt) {
+        super.update(dt)
+        this.apply(dt)
+    }
+
+    draw(context, camera) {
+        context.fillStyle = this.color.format(this.life/this.maxLife * 0.5)
+        drawCircle(context, camera.toScreenX(this.x), camera.toScreenY(this.y), this.size*camera.scale, 0)
+    }
+
+    debugDraw() {}
+}
+
+class Polygon {
+    #useCache = false
+    #cache = null
+    #cacheSize = 0
+    #cacheIndex = null
+    constructor(points=[]) {
+        this.points = points
+        this.linePoints = this.points.slice()
+        this.scale = 1
+        this.angle = 0
+        // cache implement later
+        // bding box
+    }
+
+    destroy() {
+        this.points = null
+        this.linePoints = null
+        this.#cache = null
+    }
+
+    createCache(pieces=72) {
+        this.#useCache = true
+        this.#cache = Array.from({length: pieces})
+        this.#cacheSize = Math.floor(360/pieces)
+        this.rotate = this.__cacheRotate.bind(this)
+        this.draw = this.__cacheDraw.bind(this)
+        this.rotate(this.angle)
+    }
+
+    trueRotate(angle) {
+        this.rotate(angle)
+        this.angle = 0
+        this.points = this.linePoints.slice()
+    }
+
+    rotatePoint(i, angle) {
+        let sine = Math.sin(angle)
+        let cosine = Math.cos(angle)
+        return [
+            cosine * this.points[i][0] - sine * this.points[i][1],
+            sine * this.points[i][0] + cosine * this.points[i][1]
+        ]
+    }
+    rotate(a) {this.__rotate(a)}
+    __rotate(angle) {
+        this.angle = angle
+        for (let i = 0; i < this.linePoints.length; ++i) {
+            this.linePoints[i] = this.rotatePoint(i, this.angle)
+        }
+    }
+    __cacheRotate(angle) {
+        let approx = roundToNearestMultiple(angle*180/Math.PI, this.#cacheSize)%360
+        approx = approx < 0 ? approx + 360 : approx
+        let index = Math.floor(approx/this.#cacheSize)
+        if (index == this.#cacheIndex) {return;}
+        if (this.#cache[index] !== undefined) {
+        } else {
+            this.__rotate(approx*Math.PI/180)
+            this.#cache[index] = this.linePoints.slice()
+        }
+        this.#cacheIndex = index
+    }
+
+    __cacheDraw(c, x, y, lw, s) {drawPolygon(c, x, y, this.#cache[this.#cacheIndex], lw, s*this.scale)}
+
+    __draw(context, x, y, lineWidth=0, scale=1) {drawPolygon(context, x, y, this.linePoints, lineWidth, scale*this.scale)}
+
+    draw(context, x, y, lineWidth=0, scale=1) {this.__draw(context, x, y, lineWidth, scale)}
+}
+
+class Drone extends Object2d {
+    static HalfPI = Math.PI / 2
+    constructor() {
+        super()
+        this.angular_velocity = 0
+        this.angle = 0
+        this.thrusters = {
+            left: new Thruster(),
+            right: new Thruster()
+        }
+        this.thrusters_offset = 120
+        this.inertia = 0.8
+        this.damping = 0.9
+        this.gravity = 3
+        this.terminal = 9.8 * this.gravity
+
+
+        let t = this.thrusters_offset
+        let w = 5
+        this.polygon = new Polygon([[-t, -w], [t, -w], [t, w], [-t, w]])
+        this.polygon.createCache(90)
+        this.thruster_polygon = new Polygon([[-1, 1], [-1, -2], [1, -2], [1, 1], [0, 2]])
+        this.thruster_polygon.trueRotate(Math.PI)
+        this.thruster_polygon.createCache(90)
+        this.thruster_polygon.scale = 15
+        this.thrust_force = {left: 0, right: 0, dx: 0, dy: 0}
+    }
+
+    reset() {
+        this.vx = 0
+        this.vy = 0
+        this.thrusters.left.setPower(0)
+        this.thrusters.right.setPower(0)
+        this.thrusters.left.angle = 0
+        this.thrusters.right.angle = 0
+        this.angle = 0
+        this.angular_velocity = 0
+    }
+
+    calculateMaxVelocity(time=80) {
+        let x = this.x
+        let y = this.y
+        this.reset()
+        this.thrusters.left.setPower(1)
+        this.thrusters.right.setPower(1)
+        let t = 0
+        let vy = this.terminal
+        let vx = 0
+        let av = 0
+        while (t < time) {
+            this.update(1)
+            vy = Math.max(Math.abs(this.vy), vy)
+            t ++
+        }
+        this.y = 0
+        this.angle = Math.PI * 0.5
+        t = 0
+        while (t < time) {
+            this.update(1)
+            vx = Math.max(Math.abs(this.vx), vx)
+            t++
+        }
+        t = 0
+        this.thrusters.left.setPower(0)
+        while (t < time) {
+            this.update(1)
+            av = Math.max(Math.abs(this.angular_velocity), av)
+            t++
+        }
+        this.reset()
+        this.x = x
+        this.y = y
+        return {angular:roundToNearestMultiple(av, 0.01), x: roundToNearestMultiple(vx, 0.5), y: roundToNearestMultiple(vy, 0.5)}
+    }
+
+    getThrust() {
+        let angle_left = this.angle + this.thrusters.left.angle - Drone.HalfPI
+        let angle_right = this.angle + this.thrusters.right.angle - Drone.HalfPI
+        // console.log(Math.cos(angle_right).toFixed(2))
+        // console.log((angle_left*180/Math.PI).toFixed(2))
+        this.thrust_force.left = this.thrusters.left.getPower()
+        this.thrust_force.right = this.thrusters.right.getPower()
+        return {
+            x: this.thrusters.left.getPower() * Math.cos(angle_left) + this.thrusters.right.getPower() * Math.cos(angle_right),
+            y: this.thrusters.left.getPower() * Math.sin(angle_left) + this.thrusters.right.getPower() * Math.sin(angle_right)
+        }
+    }
+
+    getTorque() {
+        let angle_left = -this.thrusters.left.angle - Drone.HalfPI
+        let left_torque = this.thrusters.left.getPower() / this.thrusters_offset * (-Math.sin(angle_left))
+        let angle_right= this.thrusters.right.angle - Drone.HalfPI
+        let right_torque = this.thrusters.right.getPower() / this.thrusters_offset * Math.sin(angle_right)
+        return (left_torque + right_torque)*this.inertia
+    }
+
+    update(dt) {
+        super.update(dt)
+        this.thrusters.left.update(dt)
+        this.thrusters.right.update(dt)
+        this.vx *= this.damping
+        this.vy *= this.damping
+        let thrust = this.getThrust()
+        this.vx += thrust.x * dt
+        this.vy += (this.gravity + thrust.y) * dt
+        this.vy = Math.min(this.vy, this.terminal)
+        this.angular_velocity += this.getTorque() * dt
+        this.angle += this.angular_velocity * dt
+        this.angular_velocity *= this.damping
+    }
+
+    draw(context, camera) {
+        context.fillStyle = Game.COLORS.PRIMARY[2]
+        this.polygon.rotate(this.angle)
+        this.polygon.draw(context, camera.toScreenX(this.x), camera.toScreenY(this.y), 0, camera.scale)
+        context.fillStyle = Game.COLORS.PRIMARY[0]
+        drawCircle(context, camera.toScreenX(this.x), camera.toScreenY(this.y), camera.scale*25, 0)
+        context.fillStyle = Game.COLORS.PRIMARY[3]
+        let dx = Math.cos(this.angle) * this.thrusters_offset
+        let dy = Math.sin(this.angle) * this.thrusters_offset
+        this.thrust_force.dx = dx
+        this.thrust_force.dy = dy
+        this.thruster_polygon.rotate(this.thrusters.right.angle + this.angle)
+        this.thruster_polygon.draw(context, camera.toScreenX(this.x + dx), camera.toScreenY(this.y + dy), 0, camera.scale)
+        this.thruster_polygon.rotate(this.thrusters.left.angle + this.angle)
+        this.thruster_polygon.draw(context, camera.toScreenX(this.x - dx), camera.toScreenY(this.y - dy), 0, camera.scale)
+    }
+}
+
+class Thruster {
+    #maxPower = 3
+    constructor() {
+        this.power_ratio = 0
+        this.angle = 0
+        this.target_angle = 0
+        this.angle_var_speed = 0.1
+        this.max_angle = Math.PI * 0.5
+        this.angle_ratio = 0
+    }
+
+    setAngle(ratio) { this.target_angle = this.max_angle * Math.max(-1, Math.min(ratio, 1))}
+
+    setPower(ratio) {this.power_ratio = Math.max(0, Math.min(1, ratio))}
+
+    getPower() {return this.power_ratio * this.#maxPower}
+
+    update(dt) {
+        this.angle += (this.target_angle - this.angle) * this.angle_var_speed * dt
+        this.angle_ratio = this.angle / this.max_angle
+    }
+}
+
+window.onload = () => main()
+</script>
+</body>
+</html>
