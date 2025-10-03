@@ -1,0 +1,1509 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Showcase?</title>
+	<style>
+body {
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+	background: black;
+}
+
+canvas {
+	position: absolute;
+	background: black;
+	left: 50%;
+	top: 50%;
+	transform: translate(-50%, -50%);
+	outline: none;
+	border: none;
+}
+	</style>
+</head>
+<body>
+<canvas></canvas>
+<script>
+function main() {
+	const MAIN = new Main()
+	MAIN.initCanvas(16, 9)
+	MAIN.cancelSmoothing()
+	MAIN.resize()
+	MAIN.start({fps: 60})
+}
+
+function roundToNearestMultiple(value, multiple) { return Math.round(value / multiple) * multiple; }
+
+function roundy(value, f) { return Math.round(value * f)/f; }
+
+function rangeCheck(value, max, min) {return min <= value && value <= max}
+
+function _clampy(v, max, min, e) {return rangeCheck(v, max, min) ? e : v} // strange clamp hehe
+
+function normalClamp(v, max, min) {return rangeCheck(v, max, min) ? v : Math.max(min, Math.min(max, v))}
+
+function sin(x) {return Math.sin(toRadians(x))}
+
+function cos(x) {return Math.cos(toRadians(x))}
+
+function toRadians(x) {return x * Math.PI / 180}
+
+function gcd(a, b) {
+	if (!b) return a;
+	return gcd(b, Math.floor(a % b));
+}
+
+function toRatio(fraction) {
+	let length = fraction.toString().length - 2
+	let denominator = Math.pow(10, length)
+	let numerator = fraction * denominator
+	let divisor = gcd(numerator, denominator)
+	numerator /= divisor
+	denominator /= divisor
+	divisor = null
+	length = null
+	return {width: numerator, height: denominator}
+}
+
+function drawText(ctx, x, y, text, font, color, lineWidth=0) {
+    ctx.font = font
+    ctx.fillStyle = color
+    ctx.strokeStyle = color
+    if (lineWidth > 0) {ctx.lineWidth = lineWidth; ctx.strokeText(text, x, y)} else {ctx.fillText(text, x, y)}
+}
+
+function drawCircle(ctx, x, y, radius, lineWidth=0, startAngle=0, endAngle=Math.PI*2) {
+	ctx.beginPath()
+	ctx.arc(x, y, radius, startAngle, endAngle)
+	if (lineWidth==0) {
+		ctx.fill()
+	} else {
+		ctx.lineWidth = lineWidth
+		ctx.stroke()
+	}
+}
+
+function drawLine(ctx, x, y, ex, ey) {
+	ctx.beginPath()
+	ctx.moveTo(x, y)
+	ctx.lineTo(ex, ey)
+	ctx.stroke()
+}
+
+function drawRect(context, x, y, w, h, lineWidth=0) {
+	if (lineWidth == 0) {
+		context.fillRect(x, y, w, h)
+	} else {
+		context.lineWidth = lineWidth
+		context.strokeRect(x, y, w, h)
+	}
+}
+
+class Game { // https://lospec.com/palette-list/pelennor8
+	static IMAGE_URLS = [
+        "data:image/png;base64, iVBORw0KGgoAAAANSUhEUgAAARAAAAAQCAYAAADefSChAAAAAXNSR0IArs4c6QAABF9JREFUeF7dW0tu1UAQtA9AVixACkhIhA1Zg0CCA8AB4IhwADgASERkTTYJEhIgwYJVOIBRP6me6rV7xvNpYc9kFfnZ/V65q2u6y+NxUH/Pnrya9LHfP78Nt47v6cODHL/8/nl4/vT17DMciF07Hd0cbh/dGD58ejOL8ev67z6mnKP/Pp69HfnYNE0TfgdfG/xhxgdXX94NJ6cvcy6ZnVsTAzj5fvSAZRzHg1y1zLFcLJ489eAHx/DAsphYqZA1BES+F8VjCYh8zslhAZHfK+KU+1dT/Piu0hjj9Z+9SLOAtIZF50qwMFEt8WiJYyVYPHhayw+vvGgsewG5//DFFCpUkFhA6D/pQB7cfRzsUOR8KWbrWhxHDMRGt8PFE7r+68X7HQYREEnuyZ1Huw6qFQGRey5CCXxXP87HVrEgfxYW+awXjuViES6W8tSTHx55mWHBzdDJ10LBIwy31VhxrQKXGKHrOL5etTkWxhycb7X0kpxWRxghCITSo0Wt7YRiecnp6HSrLOLRA8dkkUrForlawlNvfpTmJYRl5JZSTsIX8P+aODzSoN3G+UvXaUGQ2LkxRJT097Tc9kMwIbYtYwFXLDHEWNoDx1KxePDUkx81ebGwHAgIC4Ple8gxPWaA7Dg/5pdgtLDmMTFAU2NIoenvab3oamdcLfKlXoxHB8L51QZ5LxzTvk2M99yFl/LUgx81ebF8qp2/JR/AN9B+heVdsLcgoNi/wPkxz8NqY0ti8JjDvoF0VK0Zj3JPQBAxqeCBtIpFE5W9qR44llovug5qeOrBj5q8BLFoDyRnzpVz11zp8FsxW7ZoovL9FpL0YKLGiNqKua1HMYza2gPJqZdantbyw8oL+zlFWOCB8CPTnL0HawtIzHiEg516Y9bEAhzoQHhvDftLLWDRbn+PWHLrpZanHvzwyMvsSY5louaMAFsoOjZiUWAouhaw8HxrYWFvKHUF32peesKSyrGY95ASw4sfKR7IUr3MuhghLESE93u0RFTtG8DwYU8mZeVeq+hiLnstltwu7H+YqKV52QIWGWFy60V3D7kxvPixJCApeTEFROYg/MhU4QDR1io6GI87H4Y2X/WChdv+0KrAj0NDT2F4H4EloikxlsRXx0ghqo6Z8ju2gAUeSE69WBu4cnkaGz9S+eGRl5mA8Aiz1L5YRFpTQEpuSKwYtogFj84tYQd+K2+MRcgXWhhSY8Tum44Re+SIpzAhAWkFC3eGqQIbGk9TFu0Q13P44ZEXHWO2DyQFjEeb6xGjFwGxZlx+omS9yAgTL7QSajHke8U+EXdyOvelMWLb8lvHktIZhsSxVEC8+OGRl6CJGlOyra7aJYq6RSzWjIuXtkLvj1gbl3inoN6wFHqbWh/3iqHf/ZD73gMWCEhOvdTy1JMfHnk5iCGJbe0FNBaB2mfjHp2QRwxrdUBc/QYr3oi0juMYBCR2rsT3iKHjzN7YpNf5e8BSUi+1PPXiBziFzYolHOMY/wDAw4ZJ3rt/vAAAAABJRU5ErkJggg==",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEQAAAAQCAYAAACvDNlTAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAARKADAAQAAAABAAAAEAAAAAANSqq0AAACx0lEQVRYCbWW22oUQRCGu3fWG01E1IQFDyDxhEoEkQQVH0BF8ULxJfVGUN8gEuNNwBOaJbrZZA8mINlEvMjM2N+wtfR2ZrPTM5OCobe3q/6q/ququ7UqIHO3nv57v/TqyJXZx3rl89tKXqjQyOXz83Ht7AUdG+nu/g18sLTW6tvy6+jqzScVY+5jOtCt9LbU19WFKPcmZq49CLc6zSqI08eORnfnnu0N0HP8qK9/rHbWf+awVEpIkNEHxMQe8n1vLGrskg35AKB7/86LJA0tkxkjERvRJ6aDi9cfxoAvfHiZC3eluRQYnHwpJhJPIVZM7Hi9K0TIsH1DBnNxYK/5/v7x6Y0Gpwysg3zTZpvttcAmA30vQmiT1nZPURGjypv/L914VCjLBEmwh0kM7SVtYhOXmZB788/D2uREoh9NnlJ8rvxuNSj5AGdFzxSChRTXR9G5kGwugaTfXbxMhECGMayYDbv2Q/P4+OlkLuVeBimdnd3UwIccZ5wQV1qb2OYHEgIRlH+7uerVAjiV7JqDNrId+v6uf3k3aB3Jri+G6BNTWpvIOuNIQqQqKH/aoLvxK7VNbDD5LS3VJ0VTKUWqRc4U8H3fKBIT4zgy0BlJCGt2i0g7YJRV5JyRaslql6aX50yRimIcdWa4vlIJocwhQzbkGvnOwYEUU3Veref6gRRTsREbdNfcua3jXq2urj3fR0j/naHLIkOcgUfbFb2SOVO42u0Niw97JAHo+ZCB/RAh8ujiXX8YQttxJomfvD545o+zDSdORln0XJwBIWQORvnKqg5eg3yubDTqYVFSiBNst1K0SWb8pxtSSa7fLPOEEG4UMgcRZZGBczD5XJGnfhFSyD7P/E57LXnq4wNypmrnwjyVITFW+9drwqoEKovjRrPZyGQJGae6b73d21Fqe1PNnLm9lwugj1hvLAYqDAUj9j0z3MD+AzRLcFn2VywSAAAAAElFTkSuQmCC"
+    ]
+	static COLORS = {
+		BACKGROUND: ["#eae5e2", "#c0bfc0"],
+		PRIMARY: ["#191d1e", "#3f4550", "#70787a"],
+		SECONDARY: ["#baaa91", "#877459", "#534b3a"],
+		DEBUG: {
+			TEXT: "#af3c3c",
+			STROKE: "rgba(79, 126, 201, 0.4)",
+			FONT: "{0}px arial"
+		}
+	}
+	#hiddenDelta = 1
+	constructor(main) {
+		this.main = main
+		this.manager = new GStateManager()
+		this.manager.main = this
+	}
+
+	init() {
+		this.manager.addState("test1", new (class extends GState {
+			constructor() {
+				super()
+				this.scene = new Scene2d()
+				this.tilemap = new TileMap()
+				this.tilemap.scale = 3
+				this.tilemap.tile = 16
+				this.scene.camera.scale = 1;
+
+				let obj = new Player(0, -20, 20, 20)
+				obj.vy = 0
+				this.scene.addChildById(obj, "player")
+				this.scene.camera.setTarget(this.scene.getChildById("player"))
+				obj.controls.listen(window)
+				obj = null
+
+				let testy = new Object2d()
+				testy.x = 500
+				testy.y = -110
+				this.scene.addChild(testy)
+				this.scene.camera.addPointOfInterest(testy)
+
+				testy = new Object2d()
+				testy.x = 1000
+				testy.y = -150
+				this.scene.addChildById(testy, "testy")
+				this.scene.camera.addPointOfInterest(testy)
+			
+				this.scene.camera.debug = true
+				let s = new SpringChain()
+				for (let i = 0; i < 10; ++i) {
+					let spring = new Spring()
+					if (true) {
+					// spring.boom({direction: i*360/20, force: 0.001, stiffness: 2, mass: 60})
+					}
+					s.add(spring)
+				}
+				// s.anchorChain.boom({direction: 90, force: 100, stiffness: 3, mass: 50})
+				for (let i = 0; i < 5; ++i) {
+					s.springs[i].boom({direction: 180/5 * i, force: 0.001, stiffness: 2, mass: 60})
+				}
+				this.scene.addChild(s)
+			}
+
+			enter() {
+				super.enter()
+			}
+
+			async setParent(p) {
+				super.setParent(p)
+				this.scene.camera.setDimensions(p.main.main.canvas.width, p.main.main.canvas.height)
+				let sheet1 = new Spritesheet(Game.IMAGE_URLS[0])
+				await sheet1.load()
+				this.tilemap.addType("stone", new TileSorter(sheet1))
+				TileGen.lodFromFill(this.tilemap, TileGen.fullFill(100, 3))
+				this.tilemap.resize(this.stateValues.parent.main.main.canvas)
+				this.tilemap.autoMap()
+				this.scene.getChildById("player").addTilemap(this.tilemap)
+			}
+
+			frame(dt) {
+				this.scene.getChildById("testy").vx = Math.sin(Date.now()*0.001)*2
+				this.scene.update(dt)
+			}
+
+			draw() {
+				this.tilemap.draw(this.stateValues.parent.main.main.context, this.scene.camera)
+				this.scene.draw(this.stateValues.parent.main.main.context)
+			}
+		})())
+		this.manager.state = "test1"
+	}
+
+	start() {}
+
+	frame(dt) {
+		let delta = roundToNearestMultiple(dt, 0.05)*this.#hiddenDelta
+		this.manager.frame(delta)
+	}
+
+	draw() {
+		this.main.context.fillStyle = Game.COLORS.BACKGROUND[0]
+		this.main.context.fillRect(0, 0, this.main.canvas.width, this.main.canvas.height)
+		this.main.context.fillStyle = Game.COLORS.PRIMARY[2]
+		this.manager.draw()
+	}
+
+	pause() {
+		// this.manager.state = null
+		this.#hiddenDelta = 0
+	}
+
+	unpause() {
+		setTimeout(() => {
+			if (document.visibilityState == "visible") {
+				this.#hiddenDelta = 1
+			}
+		}, 100);
+		// this.manager.state = "test1"
+	}
+}
+String.prototype.format=String.prototype.f=function(){let t=this,e=arguments.length;for(;e--;)t=t.replace(RegExp("\\{"+e+"\\}","gm"),arguments[e]);return t};
+function createScript(script) {return UI.element("script", {type: "text/javascript"}, {text: script})}
+function createStyle(style) {return UI.element("style", {}, {rel: "stylesheet", textContent: style})}
+class Main {
+	static {
+		onbeforeunload = Main.beforeClose.bind(Main)
+	}
+    static log(message) {
+        if (!this.console) { return; }
+		let d = UI.element("div", {style: "width: 100%; display: flex; flex-direction: row; align-items: center; justify-content: space-between;", class: "message"})
+        d.appendChild(UI.element("span", {}, {textContent: message}))
+        let e = new Error();Error.captureStackTrace(e);let f = e.stack.split("\n")
+		d.appendChild(UI.element("span", {style: "font-size: 1rem; opacity: .5"}, {textContent: "line:{0}".format(f[2].match(/(:[\d]+)/)[0].replace(":","")) }))
+    	let contain = this.console.document.querySelector(".messages")
+		contain.scrollTo(0, contain.scrollHeight + 10);
+		contain.appendChild(d)
+    }
+
+    static beforeClose(e) {
+        if (Main.console) {
+            Main.console.close()
+        }
+    }
+
+    static createDebugConsole(popup=true) {
+		if (this.console) {throw new Error("Already has debug console")}
+        this.console = open("about:blank", "_blank", !popup ? null : "popup,width={0},height={1},left={2},top={3}".format(window.innerWidth*.25, window.innerHeight*.75, window.screenLeft + window.innerWidth*.75, window.screenTop + window.innerHeight*.25))
+        let script = 'function main() {console.log("Debuggin the debugger be like")}; main()'
+        let style = 
+`
+@import url("https://fonts.googleapis.com/css?family=Roboto")
+body, html { margin: 0; padding: 0; }
+body { width: 100vw; height: 100vh; box-sizing: border-box; padding: 0; margin: 0;
+    background-color: white;
+	overflow: hidden;
+}
+.messages {width: 100%;height: 100%;box-sizing: border-box;padding: .5rem;overflow-y: auto;}
+.message {font-family: Roboto, sans-serif, arial;font-size: 1.5rem;color: black}`
+        let html = "<!DOCTYPE html><html><head><title>Debug panel</title></head><body><div class='messages'></div></body></html>"
+		this.console.document.open()
+        this.console.document.write(html.replace(/(\r\n|\n|\r)/gm, ""))
+        this.console.document.close()
+		this.console.document.body.appendChild(createScript(script))
+		this.console.document.head.appendChild(createStyle(style))
+	}
+	constructor() {
+		this.canvas = document.querySelector("canvas")
+		this.context = this.canvas.getContext("2d")
+		this.ratio = {width: 1, height: 1}
+		this.canvas_size = 70*devicePixelRatio
+		this.canvasScale = 1
+		this.targetFps = 30
+		this.maxFrameTime = 250
+		this.deltaTime = -1
+		this.game = new Game(this)
+	}
+
+	cancelSmoothing(bool=false) {
+        this.context.mozImageSmoothingEnabled = bool;
+        this.context.webkitImageSmoothingEnabled = bool;
+        this.context.msImageSmoothingEnabled = bool;
+        this.context.imageSmoothingEnabled = bool
+	}
+
+	frame(dt) {this.game.frame(dt * this.deltaTime)}
+	draw() {
+		this.context.clearRect(0, 0, this.canvas.width, this.canvas.height)
+		this.game.draw()
+	}
+	start({fps}) {
+		window.addEventListener("resize", this.resize.bind(this))
+		document.addEventListener("visibilitychange", this.toggleTab.bind(this))	
+		this.targetFps = fps
+		this.deltaTime = this.targetFps/1000
+		this.game.start()
+		let last = 0
+		let frameTime = 0
+		let accumulator = 0.0
+		let dt = 16
+		const loop = (now) => {
+			frameTime = now - last
+			if (frameTime > this.maxFrameTime) {frameTime = this.maxFrameTime}
+			last = now
+			accumulator += frameTime
+			while (accumulator >= dt) {
+				this.frame(dt)
+				accumulator -= dt
+			}
+			this.draw()
+			requestAnimationFrame(loop)
+		}
+		loop(0)
+	}
+
+	initCanvas(w, h) {
+		this.ratio.width = w
+		this.ratio.height = h
+		this._changeCanvasSize()
+		this.game.init()
+	}
+
+	_changeCanvasSize() {
+		this.canvas.width = this.ratio.width * this.canvas_size
+		this.canvas.height = this.ratio.height * this.canvas_size
+	}
+
+	toggleTab() {if (document.visibilityState == "visible") { this.game.unpause() } else { this.game.pause() }}
+
+	resize() {
+        let ratio = this.ratio
+		if (window.innerWidth > window.innerHeight){
+            this.canvas.style.height = window.innerHeight + "px";
+            this.canvas.style.width = (this.canvas.offsetHeight * ratio.width/ratio.height) + "px";
+            if (this.canvas.offsetWidth > window.innerWidth){
+                this.canvas.style.height = (window.innerWidth * .01 / ratio.width * ratio.height * 100) + "px";
+                this.canvas.style.width  = (this.canvas.offsetHeight * ratio.width / ratio.height) + "px";
+            }
+        } else {
+            this.canvas.style.width = window.innerWidth + "px";
+            this.canvas.style.height = (this.canvas.offsetWidth * ratio.height/ratio.width) + "px";
+        }
+        this.canvasScale = this.canvas.offsetWidth / this.canvas.width
+	}
+}
+
+class Object2d {
+	static NAME = "Object2d"
+	#destroyed = false
+	#camera = null; #hasAnimation=false;
+	#cameraAttraction = {
+		x: 0,
+		y: 0,
+		targetX: null, // don't change targetX&Y
+		targetY: null,
+		radius: 350,
+		innerRadius: 150,
+		zoom: 1.25,
+		zoomPower: 1,
+		enabled: true, // enabled in use?
+		hasAttraction: false, // called .addPointOfInterest ?
+		power: 1, // 0-1 range
+		parent: null
+	}
+	static t = {NORMAL: 0, SCENE: 1, CAMERA: 2, PARENT: 3}
+	constructor() {
+        this.x = 0
+        this.y = 0
+        this.vx = 0
+        this.vy = 0
+		this._parent = null
+		this.type = Object2d.t.NORMAL
+		this.IS_OBJECT_2D = true
+		this.animation = null
+    }
+	__hasAnimation() {return this.#hasAnimation}
+	attachAnimation(animation) {this.animation = animation; this.#hasAnimation=true}
+	drawAnimation(context, camera, ox=0, oy=0, center=true, scaleImage=1, flip=false) {if (this.#hasAnimation) {
+		this.animation.draw(context, camera.toScreenX(this.x + ox), camera.toScreenY(this.y + oy), camera.scale, 0, center, scaleImage, flip)
+	}}
+	updateAnimation(dt) {
+		if (this.#hasAnimation) {
+			this.animation.update(dt)
+		}
+	}
+	// best to NOT call __ methods unless you are changing framework
+	__becomeCameraTarget(camera) {this.#camera = camera}
+	__parentCamera() {return this.#camera}
+	__stopBeingCameraTarget() {this.#camera = null}
+	// these don't activate what their function names are, they are called from Camera2d methods
+	__becomeCameraInterest(camera) {this.#cameraAttraction.parent = camera; this.#cameraAttraction.hasAttraction=true}
+	__stopBeingCameraInterest(camera) {this.#cameraAttraction.parent = null; this.#cameraAttraction.hasAttraction=false}
+	getCameraAttractionObject() {return this.#cameraAttraction}
+
+	destroy() {
+		this.#destroyed = true
+		this._parent = null
+		this.animation.destroy()
+		this.animation = null
+		if (this.__parentCamera()) {this.__parentCamera().setTarget(null)}
+		if (this.#cameraAttraction.parent) {
+			this.#cameraAttraction.parent.removePointOfInterest(this)	
+		}
+	}
+
+	getDestroyed() { return this.#destroyed }
+
+	setParent(parent) { this._parent = parent }
+
+    update(dt) {
+        this.x += this.vx * dt
+        this.y += this.vy * dt
+    }
+
+    draw(context, camera) {
+		context.fillRect(camera.toScreenX(this.x), camera.toScreenY(this.y), 10*camera.scale, 10*camera.scale)
+    }
+	
+	debugDraw(context, camera) {
+		let x = camera.toScreenX(this.x + this.#cameraAttraction.x)
+		let y = camera.toScreenY(this.y + this.#cameraAttraction.y)
+		if (this.#cameraAttraction.hasAttraction) {
+			context.strokeStyle = Game.COLORS.DEBUG.STROKE
+			drawCircle(context, x, y, this.#cameraAttraction.radius*camera.scale, 2*camera.scale)
+			drawCircle(context, x, y, this.#cameraAttraction.innerRadius*camera.scale, 2*camera.scale)
+			if (this.#cameraAttraction.targetX != null) {
+				drawLine(context, x, y, camera.toScreenX(this.#cameraAttraction.targetX), camera.toScreenY(this.#cameraAttraction.targetY))
+				this.#cameraAttraction.targetX = null
+				this.#cameraAttraction.targetY = null
+
+			}
+		}
+		camera.debugText(context, x, y, "x: {0}, y: {1}".format(Math.round(this.x), Math.round(this.y)))
+	}
+}
+
+class BasicCamera2d extends Object2d {
+    #scale = 1
+	#hiddenScale = 1/(16*devicePixelRatio)
+	#scaleOffset = 0
+	#hiddenOffset = {x: 0, y: 0}
+	#__isDebug = false
+	constructor() {
+        super()
+		this.type = Object2d.t.CAMERA
+		this.scale = 1
+		this.window = {width: 0, height: 0}
+		this.__offset = {x: 0, y: 0, easeX: 0.05, easeY: 0.1}
+	}
+	debugText(context, x, y, text, size=18) {
+		drawText(context, x, y, text, Game.COLORS.DEBUG.FONT.format(size*this.scale), Game.COLORS.DEBUG.TEXT, 0)
+	}
+	update(dt) {
+		super.update(dt)
+		this.#hiddenOffset.x += (this.__offset.x - this.#hiddenOffset.x)*this.__offset.easeX*dt
+		this.#hiddenOffset.y += (this.__offset.y - this.#hiddenOffset.y)*this.__offset.easeY*dt
+		this.#hiddenOffset.x = _clampy(Math.round(this.#hiddenOffset.x * 100)/100, 0.2, -0.2, 0)
+		this.#hiddenOffset.y = _clampy(Math.round(this.#hiddenOffset.y * 100)/100, 0.2, -0.2, 0)
+	}
+	set scale(s) { this.#scale = s }
+	getTrueScale() {return this.#scale}
+	changeScale(delta) {this.scale = delta + this.getTrueScale()}
+	get scale() { return roundToNearestMultiple(this.__getDisplayScale(), this.#hiddenScale)*devicePixelRatio }
+	get scaleOffset () {return this.#scaleOffset}
+	set scaleOffset(o) {this.#scaleOffset = o}
+	setDimensions(w, h) {this.window.width = w*0.5, this.window.height = h*0.5}
+	toScreenX(x) { return Math.round(Math.floor(x + this.getOffsetX())*this.scale) + this.window.width }
+	toScreenY(y) { return Math.round(Math.floor(y + this.getOffsetY())*this.scale) + this.window.height }
+	getOffsetX() {return -Math.floor(this.__getDisplayOffsetX()+this.#hiddenOffset.x)}
+	getOffsetY() {return -Math.floor(this.__getDisplayOffsetY()+this.#hiddenOffset.y)}
+	__getDisplayOffsetX() {return this.x}
+	__getDisplayOffsetY() {return this.y}
+	__getDisplayScale() {return this.#scale + this.#scaleOffset}
+	set offsetX(v) {this.__offset.x = v}
+	set offsetY(v) {this.__offset.y = v}
+	get offsetX() {return this.__offset.x}
+	get offsetY() {return this.__offset.y}
+	set debug(debug) {this.#__isDebug = debug}
+	get debug() {return this.#__isDebug}
+}
+
+class Camera2d extends BasicCamera2d {
+	#target = null
+	#hasTarget = false
+	#smoothedX = 0
+	#smoothedY = 0
+	#smoothScale = 1
+	#smoothEase = 0.1
+	#smoothScaleEase = 0.05
+	#lockX = false
+	#lockY = false
+	#lockMargin = 2
+	constructor() {
+		super()
+		this.ease = {x: 0.125, y: 0.1}
+		this.track = {x: 0, y: 0}
+		this.pointsOfInterest = []
+	}
+
+	addPointOfInterest(object) {
+		this.pointsOfInterest.push(object)
+		object.__becomeCameraInterest(this)
+	}
+
+	removePointOfInterest(object) {
+		this.pointsOfInterest.splice(this.pointsOfInterest.indexOf(object), 1)
+		object.__stopBeingCameraInterest(this)
+	}
+
+	update(dt) {
+		super.update(dt)
+		if (this.#hasTarget) {
+			this.trackTarget(this.#target)
+			this.x += this.track.x * dt
+			this.y += this.track.y * dt
+		}
+		let newCamX = 0
+		let newCamY = 0
+		let newScale = 0
+		let length = 0
+		this.pointsOfInterest.forEach(interest => {
+			let attraction = interest.getCameraAttractionObject()
+			if (attraction.enabled) {
+				let x = interest.x + attraction.x
+				let y = interest.y + attraction.y
+				let boundingCheck = rangeCheck(this.x, x + attraction.radius, x - attraction.radius) && rangeCheck(this.y, y + attraction.radius, y - attraction.radius)
+				if (boundingCheck) { // sqrt computation are cost heavy, so skip
+					let d = (x- this.x)**2 + (y - this.y)**2
+					d = Math.sqrt(d)
+					if (d < attraction.radius) {
+						if (d < attraction.innerRadius) {
+							newScale += (attraction.zoom - this.getTrueScale())
+							newCamX += (x - this.x) * attraction.power
+							newCamY += (y - this.y) * attraction.power
+						} else {
+							let influence = 1 - (d - attraction.innerRadius)/(attraction.radius - attraction.innerRadius)
+							newScale += (attraction.zoom - this.getTrueScale()) * attraction.zoomPower * influence
+							influence *= attraction.power
+							newCamX += (x - this.x)*influence
+							newCamY += (y - this.y)*influence
+						}
+						interest.getCameraAttractionObject().targetX = this.__getDisplayOffsetX()
+						interest.getCameraAttractionObject().targetY = this.__getDisplayOffsetY()
+						length++
+					}
+				}
+			}
+			attraction = null
+		})
+		if (length > 0) {
+			this.lerpSmoothedX(dt, this.x + newCamX/length)
+			this.lerpSmoothedY(dt, this.y + newCamY/length)
+			this.lerpSmoothScale(dt, this.getTrueScale() + newScale/length)
+			this.#lockY = false
+			this.#lockX = false
+		} else {
+			this.lerpSmoothScale(dt, this.getTrueScale())
+			if (this.#lockX) {this.#smoothedX = this.x} else {
+				this.lerpSmoothedX(dt, this.x)
+				if (Math.abs(this.x - this.#smoothedX) < this.#lockMargin) {
+					this.#lockX = true
+				}
+			}
+			if (this.#lockY) {this.#smoothedY = this.y} else {
+				this.lerpSmoothedY(dt, this.y)
+				if (Math.abs(this.y - this.#smoothedY) < this.#lockMargin) {
+					this.#lockY = true
+				}
+			}
+		}
+	}
+	lerpSmoothScale(dt, target) {this.#smoothScale += (target - this.#smoothScale)*this.#smoothScaleEase*dt}
+	lerpSmoothedX(dt, target) {this.#smoothedX += (target - this.#smoothedX)*this.#smoothEase*dt}
+	lerpSmoothedY(dt, target) {this.#smoothedY += (target - this.#smoothedY)*this.#smoothEase*dt}
+	__getDisplayOffsetX() {return this.#smoothedX}
+	__getDisplayOffsetY() {return this.#smoothedY}
+	__getDisplayScale() {return this.#smoothScale + this.scaleOffset}
+
+	trackTarget(target) {
+		let dx = target.x - this.x
+		let dy = target.y - this.y
+		this.track.x = dx * this.ease.x
+		this.track.y = dy * this.ease.y
+	}
+
+	setTarget(target) {
+		if (this.#target) {this.#target.__stopBeingCameraTarget()}
+		if (target == null) {
+			this.#target = null
+			this.#hasTarget = false
+			return;
+		}
+		this.#target = target
+		this.#target.__becomeCameraTarget(this)
+		this.#hasTarget = true
+	}
+
+	destroy() {
+		super.destroy()
+		this.setTarget(null)
+	}
+}
+
+class Object2dParent extends Object2d {
+	constructor() {
+		super()
+		this.children = []
+		this.children_keys = {}
+		this.type = Object2d.t.PARENT
+	}
+
+	destroy() {
+		super.destroy()
+		this.clear(true)
+		this.children_keys = null
+	}
+
+	clear(destroy=false) {
+		this._forAllChildren(i => {
+			this.children[i].destroy()
+			if (destroy) { delete this.children[i] } else { this.children.splice(i, 1) }
+		})
+		Object.keys(this.children_keys = k => {
+			delete this.children_keys[k]
+		})
+	}
+
+	_forAllChildren(callback) { for (let i = this.children.length - 1; i >= 0; i--) { callback.call(null, i) } }
+	
+	addChild(child) {
+		this.children.push(child)
+		if (child.IS_OBJECT_2D) {
+			child.setParent(this)
+		}
+	}
+
+	removeChild(child) { this.children.splice(this.children.indexOf(child), 1) }
+
+	addChildById(child, id) {
+		this.addChild(child)
+		this.children_keys[id] = child
+		return id
+	}
+
+	getChildById(id) {return this.children_keys[id]}
+
+	removeChildById(id) {
+		 this.removeChild(this.getChildById(id))
+		 delete this.children_keys[id]
+	}
+
+	update(dt) { super.update(dt); this._forAllChildren(i => this.children[i].update(dt)) }
+
+	draw(context, camera) { this._forAllChildren(i => this.children[i].draw(context, camera)) }
+
+	debugDraw(context, camera) {this._forAllChildren(i => this.children[i].debugDraw(context, camera))}
+}
+
+class Scene2d extends Object2dParent {
+	constructor() {
+		super()
+		this.camera = new Camera2d()
+		this.type = Object2d.t.SCENE
+	}
+
+	destroy() {
+		super.destroy()
+		this.camera.destroy()
+		this.camera = null
+	}
+
+	update(dt) {
+		super.update(dt)
+		this.camera.update(dt)
+	}
+	
+	draw(context, camera=this.camera) { 
+		super.draw(context, camera)
+		if (camera.debug) {
+			this.debugDraw(context, camera)
+			this.debugCameraPosition(context, camera)
+		}
+	}
+
+	debugCameraPosition(context, camera) {
+		context.strokeStyle = Game.COLORS.DEBUG.STROKE
+		context.lineWidth = this.camera.scale
+		let tx = this.camera.__getDisplayOffsetX()
+		let ty = this.camera.__getDisplayOffsetY()
+		let x = camera.toScreenX(tx)
+		let y = camera.toScreenY(ty)
+		let s = this.camera.scale * 20
+		context.strokeRect(x - s*0.5, y-s*0.5, s, s)
+		// camera.debugText(context, x, y, "x:{0} y:{1}".format(Math.round(tx), Math.round(ty)))
+	}
+}
+
+class StateManager {
+	#currentState = null
+	#currentStateKey = null
+	constructor() {
+		this.states = {}
+	}
+
+	destroy() {
+		this.state = null
+		Object.keys(this.states).forEach(k => {
+			this.states[k].destroy()
+			delete this.states[k]
+		})
+		this.states = null
+		this.#currentState = null
+		this.#currentStateKey = null
+	}
+
+	addState(key, state) { 
+		this.states[key] = state
+		state.setParent(this)
+	}
+
+	removeState(key) { delete this.states[key] }
+
+	set state(key) {
+		if (key === this.#currentStateKey) {
+			return; // same state
+		}
+		if (this.#currentState != null) {
+			this.#currentState.exit()
+		}
+		if (key != null) {
+			this.#currentState = this.states[key]
+			this.#currentState.enter()
+		}
+		this.#currentStateKey = key
+	}
+
+	get state() { return this.#currentState }
+
+	get stateKey() { return this.#currentStateKey }
+
+	triggerEvent(type) { if (this.#currentStateKey != null) { this.#currentState.onEventTrigger(type) } }
+}
+
+class State {
+	constructor() {
+		this.stateValues = {
+			parent: null,
+			active: false,
+		}
+	}
+
+	setParent(p) { this.stateValues.parent = p }
+
+	onEventTrigger(type) {}
+
+	destroy() {
+		Object.keys(this.stateValues).forEach(k => delete this.stateValues[k])
+		this.stateValues = null
+	}
+
+	enter() { this.stateValues.active = true }
+
+	exit() { this.stateValues.active = false }
+}
+
+class GState extends State { frame(dt) {} draw() {}}
+
+class GStateManager extends StateManager { frame(dt) { if (this.stateKey) { this.state.frame(dt) } } draw(dt) { if (this.stateKey) { this.state.draw(dt) } }}
+
+class Rect extends Object2d {
+	constructor(x, y, w, h) {
+		super()
+		this.x = x
+		this.y = y
+		this.width = w
+		this.height = h
+		this.getCameraAttractionObject().x = this.width * 0.5
+		this.getCameraAttractionObject().y = this.height * 0.5
+	}
+	
+	get left() {return this.x}
+	set left(x) {this.x = x}
+	get right() {return this.x + this.width}
+	set right(x) {this.x = x - this.width}
+	get top() {return this.y}
+	set top(y) {this.y = y}
+	get bottom() {return this.y + this.height}
+	set bottom(y) {this.y = y - this.height}
+	
+	copy() {return new Rect(this.x, this.y, this.width, this.height)}
+
+	copyOnto(rect) {rect.x = this.x, rect.y = this.y, rect.width = this.width, rect.height=this.height}
+
+	colliderect(rect) {
+		return !(
+			((this.y + this.height) <= (rect.y)) ||
+			(this.y >= (rect.y + rect.height)) ||
+			((this.x + this.width) <= rect.x) ||
+			(this.x >= (rect.x + rect.width))
+		)
+	}
+
+	draw(context, camera, lw=1) {
+		drawRect(context, camera.toScreenX(this.x), camera.toScreenY(this.y), this.width*camera.scale, this.height*camera.scale, lw*camera.scale)
+	}
+}
+
+class PhysicsRect extends Rect {
+	#dummyRect=new Rect(0, 0, 0, 0)
+	constructor(x, y, w, h) {
+		super(x, y, w, h)
+		this.tilemaps = []
+		this.collisionDirections = []
+		this.collisions = {top: false, bottom: false, left: false, right: false}
+		this.gravityFactor = 0.6
+		this.terminalVelocity = 20
+		this.downFactor = 1.25 + 0.25
+		this.deltaVelocity = {x: 0, y: 0, __lastX: 0, __lastY: 0, gravity: 0, gt: false}
+	}
+	destroy() {super.destroy(); this.tilemaps = null}
+	addTilemap(t) {
+		this.tilemaps.push(t)
+		this.#setCollisionOffsets(t.tile * t.scale)
+	}
+	applyMovement(dt) {
+		this.deltaVelocity.gravity = 0
+		this.deltaVelocity.gt = false
+		if (!this.collisions.bottom) {
+			this.deltaVelocity.gravity = this.gravityFactor * (this.vy > 0 ? this.downFactor : 1) 
+			this.vy += this.deltaVelocity.gravity * dt
+			if (this.vy > this.terminalVelocity) {
+				this.deltaVelocity.gravity = this.terminalVelocity - (this.vy - this.deltaVelocity.gravity*dt)
+				this.deltaVelocity.gt = true
+				this.vy = this.terminalVelocity
+			}
+		}
+	}
+	update(dt) {
+		this.applyMovement(dt)
+		this.checkCollisions(dt)
+		this.deltaVelocity.x = this.vx - this.deltaVelocity.__lastX
+		this.deltaVelocity.y = this.vy - this.deltaVelocity.__lastY
+		this.deltaVelocity.__lastX = this.vx
+		this.deltaVelocity.__lastY = this.vy
+	}
+	isGrounded() { return this.collisions.bottom }
+	checkCollisions(dt) {
+        this.x += this.vx * dt
+		this.collisions.left = false
+		this.collisions.right = false
+		for (let i = this.tilemaps.length - 1; i >= 0; i--) {
+			let c = this.checkCollisionsX(this.tilemaps[i])
+			Object.keys(c).forEach(direction => {
+				if (c[direction]) {
+					this.collisions[direction] = true
+				}
+			})
+		}
+		this.y += this.vy * dt
+		this.collisions.top = false
+		this.collisions.bottom = false
+		for (let i = this.tilemaps.length - 1; i >= 0; i--) {
+			let c = this.checkCollisionsY(this.tilemaps[i])
+			Object.keys(c).forEach(direction => {
+				if (c[direction]) {
+					this.collisions[direction] = true
+				}
+			})
+		}		
+	}
+	checkCollisionsX(tilemap) {
+		let collisions = {left: false, right: false}
+		for (const r of this.collision(tilemap)) {
+			if (this.vx > 0) {
+				this.vx = 0;
+				this.right = r.left
+				collisions.right = 0
+			} else if (this.vx < 0) {
+				this.vx = 0;
+				this.left = r.right
+				collisions.left = true
+			}
+		}
+		return collisions
+	}
+	checkCollisionsY(tilemap) {
+		let collisions = {top: false, bottom: false}
+		for (const r of this.collision(tilemap)) {
+			if (this.vy > 0) {
+				this.bottom = r.top
+				this.vy = 0
+				collisions.bottom = true
+			} else if (this.vy < 0) {
+				this.top = r.bottom
+				this.vy = 0
+				collisions.top = true
+			}
+		}
+		return collisions
+	}
+	collision(tilemap) {
+        let m = tilemap.tile * tilemap.scale;let xP = Math.floor(this.x/m);let yP = Math.floor(this.y/m);let r = []
+		this.#dummyRect.width = m
+		this.#dummyRect.height = m
+		for (const offset of this.collisionDirections) {
+            let t = tilemap.getTile(xP + offset[0] , yP + offset[1])
+            if (t) {if (tilemap.getSolid(t.type)) {
+					this.#dummyRect.x = t.x*m
+					this.#dummyRect.y = t.y*m
+                    if (this.colliderect(t.hasRect ? t.rect : this.#dummyRect)) {
+                        r.push(t.hasRect ? t.rect.copy() : this.#dummyRect)
+					}
+				}
+            }
+        }; xP = null;yP = null;m = null;return r
+    }
+
+    #setCollisionOffsets(tile) {
+        let widthTiles = Math.ceil(this.width/tile)
+        let heightTiles = Math.ceil(this.height/tile)
+        this.collisionDirections = TileGen.fullFill(0, (widthTiles * 2 + 1)*(heightTiles*2 + 1))
+        let i = 0
+        for (let x = 0; x < widthTiles * 2 + 1; ++x) {
+            for (let y = 0; y < heightTiles * 2 + 1; ++y) { 
+				this.collisionDirections[i] = [x - widthTiles, y - heightTiles]; i++
+            }
+        }; i = null;widthTiles = null;heightTiles = null 
+    }
+}
+
+class Controls {
+	#elements = []
+	constructor() {
+		this.keymap = {}
+		this.key = {}
+		this._keydownEvent = this._keydownEvent.bind(this)
+		this._keyreleaseEvent = this._keyreleaseEvent.bind(this)
+	}
+
+	destroy() {
+		this.#elements = null
+	}
+
+	registerKey(control, key) {this.keymap[control] = key}
+
+	_keydownEvent(e) {this.key[e.key] = true}
+
+	_keyreleaseEvent(e) {this.key[e.key] = false}
+
+	getKey(key) {return this.key[key] || false}
+
+	getControl(control, asInt=false) {
+		return asInt ? (this.getKey(this.keymap[control]) ? 1 : 0) : this.getKey(this.keymap[control])
+	}
+	
+	listen(element) {
+		element.addEventListener("keydown", this._keydownEvent)
+		element.addEventListener("keyup", this._keyreleaseEvent)
+	}
+
+	unlisten() {
+		this.#elements.forEach(e => this.unlistenSingular(e))
+		this.#elements = []
+	}
+
+	unlistenSingular(element) {
+		element.removeEventListener("keydown", this._keydownEvent)
+		element.removeEventListener("keyup", this._keyreleaseEvent)
+	}
+}
+
+class Movement2dControls extends Controls {
+	constructor(up="w", left="a", down="s", right="d") {
+		super()
+		this.registerKey("right", right)
+		this.registerKey("left", left)
+		this.registerKey("up", up)
+		this.registerKey("down", down)
+	}
+	axisX() { return this.getControl("right", true) - this.getControl("left", true) }
+	axisY() { return this.getControl("up", true) - this.getControl("down", true) }
+}
+
+class TileMap {
+    constructor() {
+        /*
+        Do NOT create objects for every tile; instead optimize with one image, one object.
+        Tile.drawatxy
+        Also OPTIMIZE only loop through tiles on screen
+        */
+        this.data = {} // HashMap<String, Tile> like "1, 5" stores a Tile object
+        this.types = {} // HashMap<Integer, TileSorter> like "stone" stores a TileSorter Object
+        this.tile = 16 // the tile size
+        this.scale = 1;
+        this.screenSize = [0, 0, 0] // width, height, area (width*height)
+        this.directions = [ // neighbor order
+            [0, -1], // up
+            [1, 0], // right
+            [0, 1], // down
+            [-1, 0] // left
+        ]
+        this.slopeDirections = [
+            [-1, -1], // top left
+            [0, -1], // top middle
+            [1, -1], // top right
+            [1, 0], // middle right
+            [1, 1], // bottom right
+            [0, 1], // bottom middle
+            [-1, 1], // bottom left
+            [-1, 0] // middle left
+        ]
+    }
+
+    fill(rect, type, sloped=false) {
+        let x = (rect.width < 0) ? rect.x + rect.width : rect.x;let y = (rect.height < 0) ? rect.y + rect.height: rect.y;let w = Math.abs(rect.width);let h = Math.abs(rect.height)
+    	for (let _x = 0; _x < w; ++_x) {for (let _y = 0; _y < h; ++_y) {this.setTile(x + _x, y + _y, type, sloped)}}
+    }
+    getData() {
+        let _ = [];let data = Object.values(this.data)
+        for (const d of data) {_.push({x: d.x,y: d.y,type : d.type,slope: d.slope})}
+        return _
+    }
+    load(data) {this.data = {}, data.forEach(d => this.setTile(d.x, d.y, d.type, d.slope))}
+    getSolid(name) { return this.types[name].solid }
+    addType(name, sorter, sloped=false) {sorter.type = name, this.types[name + (sloped ? "slope" : "")] = sorter}
+    draw(context, camera) {
+		let values = Object.values(this.data)
+		let size = Math.floor(this.screenSize[2]/(camera.scale**2)) + 1
+        if (size >= values.length) { values.forEach(t => this.types[t.type + ((t.slope == 0) ? "" : "slope")].draw(context, camera, t, this.tile, this.scale))
+		} else {
+            let scrollX = Math.floor(camera.getOffsetX()/(this.tile*this.scale))
+            let scrollY = Math.floor(camera.getOffsetY()/(this.tile*this.scale))
+			let sx = Math.floor(this.screenSize[0]/(2*camera.scale)) + 1
+			let sy = Math.floor(this.screenSize[1]/(2*camera.scale)) + 1
+            for (let y = -sy; y < sy; ++y) {
+                for (let x = -sx - 1; x < sx; ++x) {
+                    let t = this.getTile(x - scrollX, y - scrollY)
+                    if (t) {
+                        this.types[t.type + ((t.slope == 0) ? "" : "slope")].draw(context, camera, t, this.tile, this.scale)
+                    }
+                }
+            }
+        }
+    }
+    getTile(x, y) { return this.data[this.key(x, y)] }
+    setTile(x, y, type=null, sloped=false) {
+        delete this.data[this.key(x, y)]
+        if (type !== null) { this.data[this.key(x, y)] = this.genTile(type + (sloped ? "slope" : ""), x, y) }
+    }
+    autoMap() {Object.values(this.data).forEach(t => t.correct((t.slope == 0) ? this.directions : this.slopeDirections, this))}
+    // a function that generates a tile given type and position
+    genTile(type, x, y) { let tile = this.types[type].tile(x, y); return tile }
+    key(x, y) { return x + ", " + y}
+    resize(canvas) {
+        this.screenSize[0] = Math.ceil(canvas.width/(this.tile * this.scale))
+        this.screenSize[1] = Math.ceil(canvas.height/(this.tile * this.scale))
+        this.screenSize[2] = this.screenSize[0] * this.screenSize[1]
+    }
+}
+class TileSorter {
+    constructor(tilesheet, neighborOrder = null, color="255, 255, 255") {
+        this.key = {}
+        let order = neighborOrder ? neighborOrder : ["0110", "0111", "0011","1110", "1111", "1011","1100", "1101", "1001","0100", "0101", "0001","0010", "1010", "1000","0000"]
+        let images = tilesheet.images(color); this.key["x"] = images[0];
+        for (let i = 0; i < Math.min(order.length, images.length); ++i) {this.key[order[i]] = images[i]}
+		order = null; this.type = null; this.solid = true; this.sheet = tilesheet; this.slope = false
+    }
+    draw(context, camera, tile, size, scale) {
+        let rect = this.key[tile.neighbors]; 
+		context.drawImage(this.sheet.image, rect.x, rect.y, rect.width, rect.height, camera.toScreenX(Math.floor(size*tile.x*scale)), camera.toScreenY(Math.floor(size*tile.y*scale)), Math.floor(rect.width*scale*camera.scale), Math.floor(rect.height*scale*camera.scale));
+		rect = null
+    }
+    tile(x, y) { return new Tile(x, y, this.type) }
+}
+class diagonalTileSorter extends TileSorter {
+    constructor(tilesheet, neighborOrder=null, color="255, 255, 255") {
+        neighborOrder = (!neighborOrder) ? ["00xxxxx0", "x000xxxx", "xxxxx000", "xxx000xx"] : neighborOrder
+        super(tilesheet, neighborOrder, color); this.slope = true 
+	}
+    tile(x, y) { return new slopeTile(x, y, this.type) }
+}
+class Tile {
+    constructor(x, y, type) {
+        this.x = x; this.y = y; this.type = type; this.neighbors = "0000"; this.slope = 0; this.hasRect = false
+    } 
+	correct(directions, map) { this.neighbors = this.getNeighbors(directions, map) }
+    getNeighbors(directions, map) {
+        let neighbors = ""; directions.forEach((d) => {
+            let tile = map.getTile(this.x + d[0], this.y + d[1]); if (tile) { neighbors += (tile.type === this.type) ? "1" : "0" } else { neighbors += "0"}
+		})
+        return neighbors
+    }
+}
+class slopeTile extends Tile {
+    constructor(x, y, type) { super(x, y, type); this.slope = 1 }
+    checkEquals(neighbor1, neighbor2) {
+        if (neighbor1 === "x" || neighbor2 === "x") { return false }
+        for (let i = 0; i < Math.min(neighbor1.length, neighbor2.length); ++i) {
+            let a1 = neighbor1[i]
+            let a2 = neighbor2[i]
+            if (a1 !== a2 && a1 !== "x" && a2 !== "x") {
+                return false
+            }
+        }
+        return neighbor1.length == neighbor2.length
+    }
+    correct(directions, map) {
+        this.neighbors = this.getNeighbors(directions, map)
+        let key = Object.keys(map.types[this.type + "slope"].key)
+        for (let i = 0; i < key.length; ++i) {
+            if (this.checkEquals(this.neighbors, key[i])) {
+                this.neighbors = key[i]
+                break;
+            }
+        }
+        if (!this.neighbors.includes("x")) {
+            this.neighbors = "x"
+        }
+    }
+} 
+class TileGen {
+    static fullFill(w, h, num=0) {
+        let arr = []
+        for (let i = 0; i < h; ++i) {let subArr = []; for (let k = 0; k < w; ++k) {subArr.push(num)};arr.push(subArr)};return arr
+    }
+    static randomize(arr) {
+        for (let y = 0; y < arr.length; ++y) {
+            for (let x = 0; x < arr[y].length; ++x) {
+                // arr[y][x] = randint(0)
+            }
+        }
+	    return arr
+	}
+    static lodFromFill(tilemap, arr, type='stone', num=0, offset=[0, 0]) {for (let y = 0; y < arr.length; ++y) {for (let x = 0; x < arr[y].length; ++x) {if (arr[y][x] == num) {tilemap.setTile(x+offset[0], y+offset[1], type)}}}}
+    static setRect(arr, x_, y_, w, h, r=1) {for (let y = 0; y < h; ++y) { for (let x = 0; x < w; ++x) {if (typeof arr[y + y_][x+x_] !== "undefined") {arr[y + y_][x+x_] = r}}}}
+}
+
+class Spritesheet {
+	static canvas = document.createElement("canvas"); static c = this.canvas.getContext("2d")
+	#reversedImage = null
+	#hasReversed = false
+    constructor(src) {
+        this.image = new Image()
+        this.image.src = src
+        this.image.crossOrigin = "anonymous"
+        this.loaded = false
+		this.decoded = false
+        this.image.onload = () => { this.loaded = true }
+    }
+	get reversed() {return this.#reversedImage}
+	get hasReversed() {return this.#hasReversed}
+    static getPixelColor(canvas, image, x, y) {canvas.width = 1;canvas.height = 1;canvas.context.clearRect(0, 0, canvas.width, canvas.height);canvas.context.drawImage(image, x, y, 1, 1, 0, 0, 1, 1);return canvas.context.getImageData(0, 0, 1, 1)}
+    async load() {await this.image.decode(); this.decoded = true}
+	static __clearCanvas() {Spritesheet.c.clearRect(0, 0, Spritesheet.canvas.width, Spritesheet.canvas.height)}
+	static flip(image, clipColor="255, 255, 255") {
+		Spritesheet.__clearCanvas()
+		Spritesheet.canvas.width = image.width
+		Spritesheet.canvas.height = image.height
+		Spritesheet.c.save()
+		Spritesheet.c.scale(-1, 1)
+		Spritesheet.c.translate(-image.width + 1, 0)
+		Spritesheet.c.drawImage(image, 0, 0)
+		Spritesheet.c.restore()
+		Spritesheet.c.clearRect(0, 0, 1, 1)
+		Spritesheet.c.fillStyle = "rgb(" + clipColor + ")"
+		Spritesheet.c.fillRect(image.width - 1, 0, 1, 1)
+		let i = new Image()
+		i.src = Spritesheet.canvas.toDataURL()
+		Spritesheet.c.resetTransform()
+		return i
+	}
+	async reversedImages(clipColor="255, 255, 255") {
+		let flipped = await Spritesheet.flip(this.image, clipColor) 
+		let i = this.images(clipColor, true, flipped)
+		this.#reversedImage = i.image
+		this.#hasReversed = true
+		return i.images
+	}
+    images(clipColor="255, 255, 255", reversed=false, ri=null) {
+		let images = [];
+		let canvas = document.createElement("canvas");canvas.context = canvas.getContext("2d", { willReadFrequently: true});let color = clipColor.split(",").map(str => { return parseInt(str) }); let clipStart = 0;let clipWidth = 0;
+		let image = reversed ? ri : this.image
+		canvas.width = image.width
+		canvas.height = image.height
+		canvas.context.drawImage(image, 0, 0)
+		for (let i = 0; i < image.width; ++i) {
+            // let currentColor = Spritesheet.getPixelColor(canvas, image, i, 0).data
+			let currentColor = canvas.context.getImageData(i, 0, 1, 1).data
+            let equals = true
+            if (currentColor[3] == 0) {
+                equals = false
+            } else {
+                eqLoop: for (let i = 0; i < color.length; ++i) {
+                    if (color[i] != currentColor[i]) {
+                        equals = false
+                        break eqLoop;
+                    }
+                }
+            }
+            if (equals) { images.push({x: clipStart, y: 0, width: clipWidth, height: this.image.height}); clipStart = i + 1; clipWidth = 0; } else { clipWidth ++}
+        };
+		delete canvas.context; canvas = null; color = null; return reversed ? {images: images, image: image} : images
+    }
+}
+
+class __BasicSpriteAnimation extends State {
+	#images = []; #baseImage = null; #hasImage = false; #time = 0; #flippedImage = null
+	static canvas = document.createElement("canvas"); static c = this.canvas.getContext("2d")
+	constructor() {super(); this.frame=0; this.defaultTime=8;}
+	async load(sheet, flip=false, clipColor="255, 255, 255",) {
+		if (!sheet.decoded) {
+			await sheet.load()
+		}
+		this.setBaseImage(sheet.image)
+		this.addImages(sheet.images(clipColor))
+		if (flip) {
+			this.setFlippedFrames(sheet.reversedImages(clipColor))
+			this.setFlippedImage(sheet.reversed)
+		}
+	}
+	setBaseImage(image) {this.#hasImage=true;this.#baseImage=image}
+	setFlippedFrames(images) {
+		for(let i = 0; i < images.length; ++i) {
+			this.#images[i].setFlippedRect(images[i])
+		}
+	}
+	getBaseImage() {return this.#baseImage} getFlippedImage() {return this.#flippedImage}
+	setFlippedImage(image) {this.#flippedImage = image}
+	addImages(images) {images.forEach(i => this.#images.push(new __SpriteAnimationFrame(this, i)));}
+	destroy() {super.destroy(); this.#images.forEach(i => i.destroy()); this.#images=null;this.#baseImage=null}
+	getFrame(i) {return this.#images[i]}
+	setFrame(i) {this.frame=Math.max(Math.min(i, this.#images.length), 0)}
+	nextFrame(){this.setFrame((this.frame + 1)%this.#images.length)}
+	update(dt) {
+		this.#time += dt
+		let t = this.getFrame(this.frame).length || this.defaultTime
+		if (this.#time >= t) {
+			this.#time = 0
+			this.nextFrame()
+		}
+	}
+	draw(context, x, y, scale, frame=this.frame, center=true, os=1, reverse=false) {this.getFrame(frame).draw(context, x, y, scale, center, os, reverse)}
+	enter(reset=true) {
+		super.enter()
+		if (reset) {this.frame = 0}
+	}
+}
+
+class __SpriteAnimationFrame {
+	constructor(animation, rect) {
+		this.animation = animation
+		this.length = null
+		this.rect = rect
+		this.__flippedRect = null
+	}
+	setFlippedRect(rect) {this.__flippedRect = rect}
+	draw(context, x, y, scale, center, os, flip=false) {
+		let dw = this.rect.width*scale*os
+		let dh = this.rect.height*scale*os
+		let image;
+		let rect;
+		if (flip) {
+			image = this.animation.getFlippedImage()
+			rect = this.__flippedRect
+		} else {
+			image = this.animation.getBaseImage()
+			rect = this.rect
+		}
+		context.drawImage(image, rect.x, rect.y, rect.width, rect.height, 
+		x + (center ? -dw*0.5 : 0), y + (center ? -dh : 0), dw, dh
+		)
+	}
+	destroy() {this.animation = null; this.rect = null}
+}
+
+class SpriteAnimation extends StateManager {
+
+	update(dt) {if (this.stateKey) {this.state.update(dt)}}
+
+	draw(context, x, y, scale, frame, center=true, os=1, flip=false) {if (this.stateKey) { if (!frame) {frame = this.state.frame}; this.state.draw(context, x, y, scale, frame, center, os, flip) }}
+
+	async addAnimation(name, animation) {await this.addState(name, animation)}
+}
+
+
+class Spring {
+	#active = false
+	#debugRadii = 10
+	constructor() {
+		this.x = 0
+		this.y = 0
+		this.anchorX = 0
+		this.anchorY = 0
+		this.vx = 0
+		this.vy = 0
+		this.acceleration = {x: 0, y: 0}
+		this.mass = 1
+		this.stiffness = 0
+		this.damping = 2
+		this.length = 20
+		this.clamp = 3
+	}
+
+	boom({direction, force, stiffness, mass}) {
+		this.x += cos(direction) * force
+		this.y += sin(direction) * force
+		this.stiffness = stiffness
+		this.mass = mass
+		this.vx = 0
+		this.vy = 0
+		this.#active = true
+	}
+
+	__updatePositions(dt, fx, fy) {
+		this.acceleration.x = fx/this.mass
+		this.acceleration.y = fy/this.mass
+		this.vx += this.acceleration.x * dt
+		this.vy += this.acceleration.y * dt
+		this.x += this.vx * dt
+		this.y += this.vy * dt
+	}
+
+	update(dt) {
+		if (!this.#active) {
+			return;
+		}
+		let velocityMagnitude = this.vx ** 2 + this.vy ** 2
+		velocityMagnitude = Math.sqrt(velocityMagnitude)
+		if (Math.abs(velocityMagnitude) <= this.clamp) {
+			this.#active = false
+			this.vx = 0
+			this.vy = 0
+			this.x = 0
+			this.y = 0
+			return;
+		}
+		let fx = -this.stiffness * (this.x - this.length)
+		let fy = -this.stiffness * (this.y - this.length)
+		let dampX = -this.damping * this.vx
+		let dampY = -this.damping * this.vy
+		this.__updatePositions(dt, fx + dampX, fy + dampY)
+
+	}
+
+	updateAsConnected(dt, spring) {
+		let dx = (this.x + this.anchorX) - (spring.anchorY + spring.x*0)
+		let dy = (this.y + this.anchorY) - (spring.anchorY + spring.y*0)
+		let magnitude = dx ** 2 + dy ** 2
+		magnitude = Math.sqrt(magnitude)
+	
+		let fx = dx/magnitude
+		let fy = dy/magnitude
+		let force = this.stiffness * (magnitude - this.length)
+		let relativeVx = spring.vx - this.vx
+		let relativeVy = spring.vy - this.vy
+		fx = fx * force - this.damping * relativeVx
+		fy = fy * force - this.damping * relativeVy
+		this.__updatePositions(dt, -fx, -fy)
+		// spring.__updatePositions(dt, 0.1, 0.1)
+
+		this.chainPositionTo(spring)
+		// spring.chainPositionTo(this)
+	}
+
+	chainPositionTo(spring) {
+		this.anchorX = spring.anchorX + spring.x
+		this.anchorY = spring.anchorY + spring.y
+	}
+
+	debugDraw() {}
+
+	draw(context, camera) {
+		let x1 = camera.toScreenX(this.anchorX)
+		let y1 = camera.toScreenY(this.anchorY)
+		let x2 = camera.toScreenX(this.anchorX + this.x)
+		let y2 = camera.toScreenY(this.anchorY + this.y)
+		if (this.name) {
+			context.fillStyle = "rgba(255, 0, 0, .3)"
+		}
+		context.lineWidth = 2 * camera.scale
+		drawLine(context, x1, y1, x2, y2)
+		drawCircle(context, x1, y1, this.#debugRadii*camera.scale)
+		drawCircle(context, x2, y2, this.#debugRadii*camera.scale)
+
+	}
+}
+
+class SpringChain {
+	// updateAsConnected ?
+	constructor() {
+		this.x = 0
+		this.y = 0
+		this.anchorChain = new Spring()
+		this.anchorChain.name = true
+		this.springs = []
+		this.gravity = true
+	}
+
+	update(dt) {
+		this.anchorChain.update(dt)
+		for (let i = 0; i < this.springs.length; ++i) {
+			this.springs[i].updateAsConnected(dt, i - 1 >= 0 ? this.springs[i-1] : this.anchorChain)
+		}
+	}
+
+	debugDraw() {}
+
+	draw(context, camera) {
+		for (let i = 0; i < this.springs.length; ++i) {
+			this.springs[i].draw(context, camera, this.x, this.y, i==this.springs.length-1)
+		}
+	}
+
+	add(spring) {this.springs.push(spring)}
+}
+
+// --- end of utils ---
+class Player extends PhysicsRect {
+	constructor(x, y, w, h) {
+		super(x, y, w, h)
+		this.controls = new Movement2dControls()
+		this.movement = {
+			acceleration: 0.5*0.5,
+			friction: 0.4*0.6,
+			max: 6,
+			jumpHeight: 50,
+			jumpInterval: 0.08,
+			jumpCount: 0,
+			jumpCountStarted: false,
+			jumpFallEase: 0.5,
+			co: { // camera offset
+				x: 0,
+				y: 0,
+				stepX: 0.05,
+				stepY: 0.1,
+			}
+		}
+	}
+
+	applyMovement(dt) {
+		super.applyMovement(dt)
+		let x = this.controls.axisX()
+		let y = this.controls.axisY()
+		// this.__parentCamera().offsetX = this.movement.co.x * this.width * 5
+		if (x == 0) {
+			let sign = Math.sign(this.vx)
+			if (Math.abs(this.vx) > this.movement.friction) {
+				this.vx -= this.movement.friction * sign
+			} else {
+				this.vx = 0
+			}
+			if (Math.abs(this.movement.co.x) > this.movement.co.stepX) {
+				this.movement.co.x -= dt * this.movement.co.stepX * Math.sign(this.movement.co.x)
+			} else {
+				this.movement.co.x = 0
+			}
+		} else {
+			this.movement.co.x += this.movement.co.stepX * x * dt
+			this.movement.co.x = normalClamp(this.movement.co.x, 1, -1)
+			if (this.vx * x < this.movement.max) {
+				this.vx += this.movement.acceleration * x * dt
+			} else {
+				this.vx = this.movement.max * x
+			}
+		}
+		if (y <= 0) {
+			if (this.movement.jumpCountStarted) {
+				this.__haltJump(dt)
+			}
+			this.movement.jumpCount = 0
+		} else {
+			if (this.isGrounded()) {
+				this.movement.jumpCount = 0
+				this.movement.jumpCountStarted = true
+			}
+			if (this.movement.jumpCountStarted) {
+				this.movement.jumpCount = this.movement.jumpCount + this.movement.jumpInterval*dt
+				if (this.movement.jumpCount < 1) {
+					this.vy = -this.movement.jumpInterval*this.movement.jumpHeight - this.deltaVelocity.gravity
+				} else {
+					this.movement.jumpCount = 1
+					this.__haltJump(dt)
+				}
+			}
+		}
+	}
+
+	__haltJump(dt) {
+		this.movement.jumpCountStarted = false
+		if (this.vy < 0) {
+			this.vy *= this.movement.jumpFallEase
+		}
+	}
+
+	draw(context, camera) {
+		super.draw(context, camera)
+	}
+}
+class UI{static element(t,e={},n={}){let r=document.createElement(t);return UI.setAttributes(r,e),UI.setOtherAttrs(r,n),r}static setAttributes(t,e){Object.keys(e).forEach(n=>t.setAttribute(n,e[n]))}static setOtherAttrs(t,e){Object.keys(e).forEach(n=>t[n]=e[n])}static html(t){let e=UI.element("div");return e.innerHTML=t,e.firstChild}static components={};static registerComponent(t,e){if(this.components[t]){console.log("Component {0} is already registered".format(t));return}let n=UI.element("div");n.innerHTML=e.trim(),UI.components[t]=n.children[0],n.innerHTML="",n=null}static getComponent(t){return this.components[t].cloneNode(!0)}}
+window.onload = () => main()
+
+</script>
+</body>
+</html>
